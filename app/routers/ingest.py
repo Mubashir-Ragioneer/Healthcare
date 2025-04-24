@@ -35,16 +35,18 @@ class URLIngestionEntry(BaseModel):
 # -----------------------------
 
 @router.post("/upload/", summary="Upload one or more files")
-async def upload_files(files: List[UploadFile] = File(...)):
+async def upload_files(
+    files: List[UploadFile] = File(...),
+    user_id: str = Form(...)  # <-- Add this
+):
     """
     Upload files and store them locally & in MongoDB.
     """
     results = []
     for file in files:
-        result = await process_file(file)
+        result = await process_file(file, user_id=user_id)  # <-- Pass user_id here
         results.append(result)
     return {"status": "success", "results": results}
-
 
 # -----------------------------
 # Download File by ID
@@ -69,37 +71,29 @@ async def download_file(document_id: str):
 # -----------------------------
 # Ingest URL
 # -----------------------------
-
 @router.post("/url/", response_model=URLIngestionResponse, summary="Ingest a public URL")
-async def ingest_url(url: str = Form(...)):
-    """
-    Scrape and ingest content from a public URL using Firecrawl.
-    """
-    result = await process_url(url)
+async def ingest_url(
+    url: str = Form(...),
+    user_id: str = Form(...)
+):
+    result = await process_url(url, user_id=user_id)
 
-    doc = {
-        "url": url,
-        "content": result["content"],
-        "timestamp": datetime.utcnow(),
-    }
-
-    inserted = await documents_collection.insert_one(doc)
     return URLIngestionResponse(
-        document_id=str(inserted.inserted_id),
-        url=url,
-        content=result["content"],
-        timestamp=doc["timestamp"]
+        document_id=result["document_id"],
+        url=result["source"],
+        content=result["text_snippet"],
+        timestamp=datetime.utcnow()
     )
-
 
 # -----------------------------
 # List All Ingested URLs
 # -----------------------------
 
 @router.get("/url/", response_model=List[URLIngestionEntry], summary="List all URL ingestions")
-async def list_url_ingestions():
-    """
-    List all ingested URLs and their content.
-    """
-    docs = await documents_collection.find({"url": {"$exists": True}}).to_list(100)
+async def list_url_ingestions(user_id: str):
+    docs = await documents_collection.find({
+        "url": {"$exists": True},
+        "user_id": user_id
+    }).to_list(100)
+
     return [URLIngestionEntry(**doc) for doc in docs]

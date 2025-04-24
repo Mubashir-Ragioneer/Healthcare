@@ -1,5 +1,3 @@
-# app/services/chat_engine.py
-
 from openai import OpenAI
 from app.core.config import settings
 from typing import List, Dict, Any
@@ -7,8 +5,9 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from uuid import uuid4
 import asyncio
+from app.db.pinecone import index
 
-# MongoDB connection
+# MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = mongo_client[settings.MONGODB_DB]
 conversations = db["conversations"]
@@ -16,19 +15,44 @@ conversations = db["conversations"]
 # OpenAI client
 client = OpenAI(
     api_key=settings.OPENAI_API_KEY,
-    base_url=settings.OPENAI_BASE_URL
+    base_url=settings.OPENAI_BASE_URL,
 )
 
-def chat_with_assistant(messages: List[Dict[str, Any]], user_id: str) -> str:
-    # Add timestamp to each message
-    timestamped_msgs = [
-        {**msg, "timestamp": datetime.utcnow().isoformat()} for msg in messages
-    ]
+# Get OpenAI embedding
+async def get_openai_embedding(text: str) -> list[float]:
+    res = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return res.data[0].embedding
 
-    # Query model
+# Retrieve top-k similar chunks from Pinecone
+async def retrieve_similar_chunks(user_query: str, user_id: str, top_k: int = 5):
+    embedding = await get_openai_embedding(user_query)
+    result = index.query(
+        vector=embedding,
+        top_k=top_k,
+        include_metadata=True,
+        filter={"user_id": user_id}   # ✅ filter for just this user's documents
+    )
+    return [match["metadata"]["chunk_text"] for match in result["matches"]]
+
+# Core chat function
+async def chat_with_assistant(messages: List[Dict[str, Any]], user_id: str) -> str:
+    query = messages[-1]["content"]
+
+    # ✅ Await the async function directly
+    context_chunks = await retrieve_similar_chunks(query, user_id)
+
+    system_prompt = {
+        "role": "system",
+        "content": "Relevant medical context:\n" + "\n---\n".join(context_chunks[:3])
+    }
+    final_messages = [system_prompt] + messages
+
     response = client.chat.completions.create(
         model=settings.LLM_MODEL,
-        messages=messages,
+        messages=final_messages,
         temperature=settings.LLM_TEMPERATURE,
         max_tokens=settings.LLM_MAX_TOKENS,
     )
@@ -40,16 +64,20 @@ def chat_with_assistant(messages: List[Dict[str, Any]], user_id: str) -> str:
         "timestamp": datetime.utcnow().isoformat()
     }
 
-    # Async logging to MongoDB
+    timestamped_msgs = [
+        {**msg, "timestamp": datetime.utcnow().isoformat()} for msg in messages
+    ]
+
+    # ✅ Async DB logging
     async def log_to_db():
         await conversations.update_one(
             {"user_id": user_id},
             {
                 "$set": {"last_updated": datetime.utcnow()},
                 "$setOnInsert": {
-                    "created_at": datetime.utcnow(),
                     "conversation_id": str(uuid4()),
-                    "user_id": user_id
+                    "created_at": datetime.utcnow(),
+                    "user_id": user_id,
                 },
                 "$push": {"messages": {"$each": timestamped_msgs + [reply_msg]}}
             },
@@ -57,4 +85,5 @@ def chat_with_assistant(messages: List[Dict[str, Any]], user_id: str) -> str:
         )
 
     asyncio.create_task(log_to_db())
+
     return reply

@@ -18,8 +18,9 @@ async def request_quote(req: QuoteRequest):
     doc["created_at"] = datetime.utcnow()
     await quote_requests_collection.insert_one(doc)
     return {"message": "✅ Quotation request submitted."}
-
-@router.get("/request", response_model=List[QuoteRequest], summary="List all quote requests")
-async def list_quote_requests():
-    docs = await quote_requests_collection.find().to_list(100)
+    
+@router.get("/request", response_model=List[QuoteRequest])
+async def list_quote_requests(user_id: str):
+    docs = await quote_requests_collection.find({"user_id": user_id}).to_list(100)
     return docs
+
