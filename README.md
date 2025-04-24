@@ -1,37 +1,33 @@
-# 🧠 AI Medical Assistant
+# 🧠 AI Medical Assistant (Backend Only)
 
-An AI-powered chatbot and scheduling platform built using FastAPI, OpenAI GPT-4o, MongoDB, and Pinecone, with a modern frontend using Next.js and Tailwind.
+An AI-powered medical assistant backend built using **FastAPI**, **OpenAI GPT-4o**, **MongoDB**, and **Pinecone**. It provides LLM-driven chat, appointment scheduling, quotation requests, document ingestion, and an admin panel to configure language model settings.
 
-## Features
+---
 
-- GPT-style medical chat interface
-- PDF/blog ingestion and semantic search
-- Appointment scheduling with calendar UI
-- Quote requests, exam bookings
-- Admin dashboard for LLM settings
-- Human receptionist fallback
+## 🔧 Features
 
-## Stack
+- 🗣️ GPT-style medical chat interface (OpenAI GPT-4o)
+- 📥 PDF/blog ingestion with semantic search (Pinecone)
+- 📅 Appointment scheduling and doctor listings (MongoDB)
+- 📨 Quote requests and exam bookings
+- 🧑‍⚕️ Human receptionist fallback logic (via endpoints)
+- ⚙️ Admin dashboard for LLM runtime settings
 
-- **Backend**: FastAPI + OpenAI + Pinecone + MongoDB
-- **Frontend**: Next.js + Tailwind CSS + shadcn/ui
-- **Storage**: Pinecone (vector), MongoDB (structured)
+---
 
-## Setup
+## 🧱 Stack
+
+- **Backend**: FastAPI, OpenAI SDK (v1+), Pinecone, MongoDB
+- **Containerization**: Docker, Docker Compose
+- **Database**: MongoDB (hosted via Docker)
+- **Vector DB**: Pinecone
+
+---
+
+## 🚀 Setup Instructions
+
+### 1. Clone & Navigate
 
 ```bash
-# 1. Install dependencies
-cd apps/backend && pip install -r requirements.txt
-cd ../frontend && npm install
-
-# 2. Run backend & Mongo
-docker-compose up
-
-# 3. Run frontend
-cd apps/frontend
-npm run dev
-
-
-## License
-
-MIT © YourName
+git clone https://github.com/yourname/ai-medical-assistant.git
+cd ai-medical-assistant
