@@ -1,4 +1,4 @@
-# app/core/config.py
+app/core/config.py
 
 from typing import Optional
 from pydantic import Field, AnyHttpUrl
@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     PINECONE_API_KEY: str = Field(..., env="PINECONE_API_KEY")
     PINECONE_ENV: str = Field(..., env="PINECONE_ENV")
     PINECONE_INDEX: str = Field(..., env="PINECONE_INDEX")
+
+    # Firecrawl settings
+    FIRECRAWL_API_KEY: str = Field(..., env="FIRECRAWL_API_KEY")
 
     # Frontend settings
     FRONTEND_URL: AnyHttpUrl = Field(

@@ -1,3 +1,4 @@
+app/core/setup.py
 from fastapi import FastAPI
 from app.api import chat, ingest, admin, doctor, receptionist
 

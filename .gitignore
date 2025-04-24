@@ -4,6 +4,7 @@ __pycache__/
 .env
 venv/
 OG_requirements.txt
+storage/
 
 # Node
 node_modules/
@@ -17,3 +18,38 @@ Thumbs.db
 # Logs
 logs
 *.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+
+# Env
+.env
+.env.*
+
+# VS Code
+.vscode/
+
+# Storage
+storage/
+
+# Virtualenv
+venv/
+ENV/
+env/
+.venv/
+
+# Logs
+*.log
+
+# Docker
+*.db
+*.pid
+*.sock
+
+# OS
+.DS_Store
+Thumbs.db
