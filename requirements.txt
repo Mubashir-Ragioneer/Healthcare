@@ -58,3 +58,7 @@ wcwidth==0.2.13
 websockets==15.0.1
 firecrawl-py
 python-docx
+pytesseract==0.3.10
+pdf2image==1.17.0
+pillow==10.3.0
+poppler-utils  # ⚠️ system dependency, not a pip package

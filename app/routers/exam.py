@@ -1,43 +1,26 @@
-# app/routers/exam.py
-
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional
-from app.services.exam_service import schedule_exam, ExamScheduleResponse
+from typing import Optional, List
+from app.db.mongo import exam_requests_collection
 
 router = APIRouter(tags=["exam"])
 
 class ExamScheduleRequest(BaseModel):
-    specialization: str = Field(..., description="Medical specialty")
-    exam_type: str       = Field(..., description="Specific exam type")
-    scheduled_time: datetime = Field(
-        ..., 
-        description="Desired date/time in ISO format"
-    )
-    user_id: str         = Field(..., description="Patient identifier")
-    purpose: Optional[str] = Field(None, description="Reason for the exam")
+    specialization: str
+    exam_type: str
+    scheduled_time: datetime
+    user_id: str
+    purpose: Optional[str] = None
 
-@router.post(
-    "/schedule",
-    response_model=ExamScheduleResponse,
-    summary="Schedule a medical exam",
-    status_code=status.HTTP_201_CREATED,
-)
-async def schedule_exam_endpoint(req: ExamScheduleRequest):
-    """
-    Schedule an exam and return a confirmation.
-    """
-    try:
-        return await schedule_exam(
-            req.specialization,
-            req.exam_type,
-            req.scheduled_time,
-            req.user_id,
-            req.purpose,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+@router.post("/schedule", status_code=201, summary="Schedule a medical exam")
+async def schedule_exam(req: ExamScheduleRequest):
+    doc = req.dict()
+    doc["created_at"] = datetime.utcnow()
+    await exam_requests_collection.insert_one(doc)
+    return {"message": "✅ Exam scheduled successfully."}
+
+@router.get("/schedule", response_model=List[ExamScheduleRequest], summary="List all exam requests")
+async def list_exam_requests():
+    docs = await exam_requests_collection.find().to_list(100)
+    return docs
