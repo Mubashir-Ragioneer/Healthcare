@@ -7,16 +7,5 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    depends_on:
-      - mongodb
-
-  mongodb:
-    image: mongo:6.0
-    container_name: mongodb
-    ports:
-      - "27017:27017"
     volumes:
-      - mongo_data:/data/db
-
-volumes:
-  mongo_data:
+      - .:/app

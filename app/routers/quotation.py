@@ -1,37 +1,25 @@
-# app/routers/quotation.py
-
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from datetime import datetime
-from app.services.quotation_service import request_quote, QuoteResponse
+from typing import List
+from app.db.mongo import quote_requests_collection
 
 router = APIRouter(tags=["quotation"])
 
 class QuoteRequest(BaseModel):
-    category: str = Field(..., description="Quotation category (diagnosis, exam, etc.)")
-    subcategory: str = Field(..., description="Specific sub-category")
-    details: str = Field(..., description="Additional details describing the request")
-    user_id: str = Field(..., description="Patient identifier")
+    category: str
+    subcategory: str
+    details: str
+    user_id: str
 
-@router.post(
-    "/request",
-    response_model=QuoteResponse,
-    summary="Request a quotation",
-    status_code=status.HTTP_201_CREATED,
-)
-async def request_quote_endpoint(req: QuoteRequest):
-    """
-    Handle quotation requests and return a quote ID, ETA, and status.
-    """
-    try:
-        return await request_quote(
-            req.category,
-            req.subcategory,
-            req.details,
-            req.user_id,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+@router.post("/request", status_code=201, summary="Request a quotation")
+async def request_quote(req: QuoteRequest):
+    doc = req.dict()
+    doc["created_at"] = datetime.utcnow()
+    await quote_requests_collection.insert_one(doc)
+    return {"message": "✅ Quotation request submitted."}
+
+@router.get("/request", response_model=List[QuoteRequest], summary="List all quote requests")
+async def list_quote_requests():
+    docs = await quote_requests_collection.find().to_list(100)
+    return docs

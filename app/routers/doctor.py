@@ -57,3 +57,15 @@ async def book_appointment(a: AppointmentCreate):
     await appointments_collection.insert_one(rec.dict(by_alias=True))
 
     return rec
+
+@router.get(
+    "/appointments",
+    summary="List all booked appointments",
+    response_model=List[AppointmentInDB],
+)
+async def get_appointments():
+    """
+    Retrieve all booked doctor appointments from MongoDB.
+    """
+    docs = await appointments_collection.find().to_list(length=100)
+    return docs
