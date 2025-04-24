@@ -1,3 +1,5 @@
+# app/db/pinecone.py
+
 from pinecone import Pinecone, CloudProvider, AwsRegion
 
 from app.core.config import settings
