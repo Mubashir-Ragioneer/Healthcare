@@ -1,0 +1,15 @@
+MONGODB_URI=mongodb://mongodb:27017
+MONGODB_DB=healthcare
+
+OPENAI_API_KEY=sk-xxxxx
+OPENAI_BASE_URL=https://api.openai.com/v1
+
+SYSTEM_PROMPT=You are a helpful medical assistant.
+LLM_TEMPERATURE=0.6
+LLM_MAX_TOKENS=1024
+LLM_MODEL=gpt-4o
+
+FRONTEND_URL=http://localhost:3000
+PINECONE_API_KEY=your_key
+PINECONE_ENV=your_env
+PINECONE_INDEX=medical-assistant
