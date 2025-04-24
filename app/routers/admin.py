@@ -1,64 +1,46 @@
-# app/routers/admin.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
+from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 
 router = APIRouter(
-    prefix="/llm",               # now relative to the mount point
+    prefix="/llm",
     tags=["admin", "llm"],
 )
 
+# MongoDB setup
+mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
+db = mongo_client[settings.MONGODB_DB]
+llm_settings_collection = db["llm_settings"]
+
 class LLMSettings(BaseModel):
     prompt: str = Field(..., description="System prompt for the LLM")
-    temperature: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Sampling temperature (0.0–1.0)",
-    )
-    max_tokens: int = Field(
-        ...,
-        gt=0,
-        description="Maximum tokens for each response",
-    )
-    model: str = Field(..., description="Model identifier")
+    temperature: float = Field(..., ge=0.0, le=1.0)
+    max_tokens: int = Field(..., gt=0)
+    model: str = Field(...)
 
     @validator("model")
     def validate_model(cls, v):
-        allowed = {settings.LLM_MODEL, "gpt-3.5-turbo", "gpt-4"}
+        allowed = {"gpt-4", "gpt-3.5-turbo", settings.LLM_MODEL}
         if v not in allowed:
             raise ValueError(f"Unsupported model: {v}")
         return v
 
-# In-memory store of current settings
-_current_settings = LLMSettings(
-    prompt=settings.SYSTEM_PROMPT,
-    temperature=settings.LLM_TEMPERATURE,
-    max_tokens=settings.LLM_MAX_TOKENS,
-    model=settings.LLM_MODEL,
-)
-
-@router.get(
-    "/",
-    response_model=LLMSettings,
-    summary="Get current LLM settings",
-)
+# GET route
+@router.get("/", response_model=LLMSettings, summary="Get current LLM settings")
 async def get_llm_settings():
-    """
-    Retrieve the current LLM configuration.
-    """
-    return _current_settings
+    cfg = await llm_settings_collection.find_one({"_id": "config"})
+    if not cfg:
+        raise HTTPException(status_code=404, detail="LLM config not set")
+    cfg.pop("_id", None)
+    return cfg
 
-@router.put(
-    "/",
-    response_model=LLMSettings,
-    summary="Update LLM settings",
-)
+# PUT route
+@router.put("/", response_model=LLMSettings, summary="Update LLM settings")
 async def update_llm_settings(cfg: LLMSettings):
-    """
-    Update in-memory LLM configuration. (Not persisted permanently.)
-    """
-    global _current_settings
-    _current_settings = cfg
-    return _current_settings
+    await llm_settings_collection.update_one(
+        {"_id": "config"},
+        {"$set": cfg.dict()},
+        upsert=True
+    )
+    return cfg

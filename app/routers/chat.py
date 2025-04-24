@@ -40,7 +40,8 @@ async def chat_endpoint(request: ChatRequest):
     try:
         msgs = [msg.dict() for msg in request.messages]
         # ❗ No await here anymore
-        reply_text = chat_with_assistant(msgs, request.user_id)
+        reply_text = await chat_with_assistant(msgs, request.user_id)
+
         return ChatResponse(reply=reply_text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

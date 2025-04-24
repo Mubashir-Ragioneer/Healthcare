@@ -1,25 +1,21 @@
-# app/db/pinecone.py
-
-from pinecone import Pinecone, CloudProvider, AwsRegion
-
+from pinecone import Pinecone, ServerlessSpec
 from app.core.config import settings
 
-# Initialize Pinecone client
+# Initialize client
 pc = Pinecone(api_key=settings.PINECONE_API_KEY)
 
-# Optionally create index if not exists
 index_name = settings.PINECONE_INDEX
 
-if index_name not in pc.list_indexes().names():
-    pc.create_index_for_model(
+# Create index if it doesn't exist
+if index_name not in [i.name for i in pc.list_indexes()]:
+    pc.create_index(
         name=index_name,
-        cloud=CloudProvider.AWS,
-        region=AwsRegion.US_EAST_1,
-        embed={
-            "model": "multilingual-e5-large",
-            "field_map": {"text": "chunk_text"},
-            "metric": "cosine"
-        }
+        dimension=1536,
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud="aws",
+            region="us-east-1"
+        )
     )
 
 # Load index

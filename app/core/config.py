@@ -44,9 +44,10 @@ class Settings(BaseSettings):
 
     # LLM settings
     SYSTEM_PROMPT: str = Field(
-        default="You are an AI medical assistant.",
+        default="You are a highly knowledgeable and empathetic AI healthcare assistant designed to support users with general medical inquiries...",
         env="SYSTEM_PROMPT"
     )
+
     LLM_TEMPERATURE: float = Field(
         default=0.6,
         env="LLM_TEMPERATURE"

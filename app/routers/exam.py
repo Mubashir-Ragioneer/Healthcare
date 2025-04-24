@@ -20,7 +20,7 @@ async def schedule_exam(req: ExamScheduleRequest):
     await exam_requests_collection.insert_one(doc)
     return {"message": "✅ Exam scheduled successfully."}
 
-@router.get("/schedule", response_model=List[ExamScheduleRequest], summary="List all exam requests")
-async def list_exam_requests():
-    docs = await exam_requests_collection.find().to_list(100)
+@router.get("/schedule", response_model=List[ExamScheduleRequest])
+async def list_exam_requests(user_id: str):
+    docs = await exam_requests_collection.find({"user_id": user_id}).to_list(100)
     return docs
