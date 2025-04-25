@@ -1,14 +1,8 @@
-<<<<<<< HEAD
-# 🧠 AI Medical Assistant (Backend Only)
-=======
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110.0-009688?logo=fastapi)
 ![MongoDB](https://img.shields.io/badge/MongoDB-6.0-green?logo=mongodb)
 ![OpenAI](https://img.shields.io/badge/OpenAI-GPT--4o-blue?logo=openai)
 ![Build](https://img.shields.io/badge/Build-Passing-brightgreen)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
-
-# 🧠 AI Medical Assistant
->>>>>>> f1d4bd5 (✅ Finalize backend ingestion, LLM settings, and Docker setup)
 
 # 🧠 AI Medical Assistant (Backend Only)
 
