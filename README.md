@@ -35,5 +35,7 @@ An AI-powered medical assistant backend built using **FastAPI**, **OpenAI GPT-4o
 ### 1. Clone & Navigate
 
 ```bash
-git clone https://github.com/yourname/ai-medical-assistant.git
-cd ai-medical-assistant
+git clone https://github.com/Mubashir-Ragioneer/Healthcare.git
+cd .\Healthcare\app\
+# create and paste the .env content 
+docker-compose up --build
