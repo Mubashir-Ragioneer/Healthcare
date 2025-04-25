@@ -1,11 +1,9 @@
-# app/services/file_ingestor.py
 import os
 import uuid
 import pytesseract
 from datetime import datetime
 from fastapi import UploadFile, HTTPException
 from pdf2image import convert_from_bytes
-import aiofiles
 import docx
 from firecrawl import FirecrawlApp
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -23,10 +21,6 @@ firecrawl = FirecrawlApp(api_key=settings.FIRECRAWL_API_KEY)
 
 # OpenAI client for embedding
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
-
-# Storage config
-STORAGE_DIR = "storage"
-os.makedirs(STORAGE_DIR, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
@@ -78,9 +72,6 @@ async def process_file(file: UploadFile, user_id: str) -> dict:
             raise HTTPException(status_code=400, detail="File size exceeds 5MB limit.")
 
         file_id = str(uuid.uuid4())
-        save_path = os.path.join(STORAGE_DIR, f"{file_id}{ext}")
-        async with aiofiles.open(save_path, "wb") as f:
-            await f.write(content)
 
         # Extract text
         text = ""
@@ -92,20 +83,23 @@ async def process_file(file: UploadFile, user_id: str) -> dict:
                 raise HTTPException(status_code=500, detail=f"PDF OCR failed: {str(e)}")
         elif ext == ".docx":
             try:
-                doc = docx.Document(save_path)
+                with open("temp.docx", "wb") as temp_doc:
+                    temp_doc.write(content)
+                doc = docx.Document("temp.docx")
                 text = "\n".join(para.text for para in doc.paragraphs)
+                os.remove("temp.docx")
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"DOCX parsing failed: {str(e)}")
         elif ext == ".txt":
             text = content.decode("utf-8")
 
-        # Store in Mongo
+        # Store in Mongo (no local storage)
         doc_record = {
             "file_id": file_id,
             "filename": file.filename,
             "user_id": user_id,
             "extension": ext,
-            "path": save_path,
+            "file_data": content,
             "text": text,
             "created_at": datetime.utcnow()
         }
