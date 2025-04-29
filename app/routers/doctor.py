@@ -69,3 +69,15 @@ async def get_appointments():
     """
     docs = await appointments_collection.find().to_list(length=100)
     return docs
+
+@router.get(
+    "/appointments/{user_id}",
+    summary="List all booked appointments for a specific user",
+    response_model=List[AppointmentInDB],
+)
+async def get_appointments_for_user(user_id: str):
+    """
+    Retrieve all booked doctor appointments for a specific user from MongoDB.
+    """
+    docs = await appointments_collection.find({"user_id": user_id}).to_list(length=100)
+    return docs
