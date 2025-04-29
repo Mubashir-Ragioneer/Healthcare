@@ -1,3 +1,5 @@
+# app/routers/admin.py
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -5,8 +7,9 @@ from app.core.config import settings
 
 router = APIRouter(
     prefix="/llm",
-    tags=["admin", "llm"],
+    tags=["llm"],  # ❌ Removed "admin"
 )
+
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
