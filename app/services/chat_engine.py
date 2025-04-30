@@ -1,3 +1,6 @@
+# app/service/chat_engine.py
+
+
 from openai import OpenAI
 from app.core.config import settings
 from typing import List, Dict, Any
@@ -6,6 +9,12 @@ from datetime import datetime
 from uuid import uuid4
 import asyncio
 from app.db.pinecone import index
+from app.db.mongo import get_db  # assuming you have a db helper
+
+async def get_llm_settings():
+    doc = await db["llm_settings"].find_one({"_id": "config"})  # <- required to match admin.py
+    return doc or {}
+
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
@@ -44,18 +53,27 @@ async def chat_with_assistant(messages: List[Dict[str, Any]], user_id: str) -> s
     # ✅ Await the async function directly
     context_chunks = await retrieve_similar_chunks(query, user_id)
 
+    llm_settings = await get_llm_settings()
+
+    system_prompt_text = llm_settings.get("system_prompt", "You are a helpful healthcare assistant. Respond clearly and briefly.")
+    model = llm_settings.get("model", "gpt-4")
+    temperature = llm_settings.get("temperature", 0.7)
+    max_tokens = llm_settings.get("max_tokens", 400)
+
     system_prompt = {
         "role": "system",
-        "content": "Relevant medical context:\n" + "\n---\n".join(context_chunks[:3])
+        "content": system_prompt_text + "\n\nRelevant context:\n" + "\n---\n".join(context_chunks[:3])
     }
     final_messages = [system_prompt] + messages
 
     response = client.chat.completions.create(
-        model=settings.LLM_MODEL,
+        model=model,
         messages=final_messages,
-        temperature=settings.LLM_TEMPERATURE,
-        max_tokens=settings.LLM_MAX_TOKENS,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
+
+
 
     reply = response.choices[0].message.content
     reply_msg = {
