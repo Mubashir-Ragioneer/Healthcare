@@ -5,6 +5,8 @@ from typing import List
 from datetime import datetime
 from app.models.appointment import AppointmentCreate, AppointmentInDB
 from app.db.mongo import appointments_collection
+from app.services.feegow import forward_to_feegow
+
 
 # No prefix here—will be mounted under "/doctors" in main.py
 router = APIRouter(tags=["doctors"])
@@ -55,6 +57,11 @@ async def book_appointment(a: AppointmentCreate):
 
     # Persist to MongoDB
     await appointments_collection.insert_one(rec.dict(by_alias=True))
+    try:
+        await forward_to_feegow(rec.dict())
+    except Exception as e:
+        print(f"⚠️ Feegow sync failed: {e}")
+
 
     return rec
 
