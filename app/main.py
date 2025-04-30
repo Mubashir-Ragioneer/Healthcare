@@ -1,7 +1,7 @@
 # app/main.pt
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.routers import auth  
 from app.core.config import settings
 from app.db.mongo import client, verify_mongodb_connection
 from app.routers import (
@@ -46,6 +46,7 @@ async def root():
     return {"status": "ok", "service": "Healthcare AI Assistant"}
 
 # ✅ 5. Register routes
+app.include_router(auth.router,         prefix="/auth")  
 app.include_router(admin.router,        prefix="/admin")
 app.include_router(chat.router,         prefix="/chat")
 app.include_router(doctor.router,       prefix="/doctors")

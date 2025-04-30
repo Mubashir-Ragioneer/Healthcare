@@ -1,7 +1,10 @@
+# app/routers/ingest.py
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List
+from fastapi.encoders import jsonable_encoder
 from datetime import datetime
 import io
 
@@ -27,6 +30,15 @@ class URLIngestionEntry(BaseModel):
     content: str
     timestamp: datetime
 
+# -----------------------------
+# Helper function
+# -----------------------------
+
+def clean_mongo_document(doc):
+    doc["_id"] = str(doc["_id"])
+    if "created_at" in doc and isinstance(doc["created_at"], datetime):
+        doc["created_at"] = doc["created_at"].isoformat()
+    return doc
 
 # -----------------------------
 # Upload Files
@@ -42,7 +54,6 @@ async def upload_files(
         result = await process_file(file, user_id=user_id)
         results.append(result)
     return {"status": "success", "results": results}
-
 
 # -----------------------------
 # Download File by ID
@@ -62,7 +73,6 @@ async def download_file(document_id: str):
         "Content-Disposition": f"attachment; filename={doc['filename']}"
     })
 
-
 # -----------------------------
 # Ingest URL
 # -----------------------------
@@ -81,7 +91,6 @@ async def ingest_url(
         timestamp=datetime.utcnow()
     )
 
-
 # -----------------------------
 # List All Ingested URLs
 # -----------------------------
@@ -94,3 +103,34 @@ async def list_url_ingestions(user_id: str):
     }).to_list(100)
 
     return [URLIngestionEntry(**doc) for doc in docs]
+
+# -----------------------------
+# List All Ingested Files (file-logs)
+# -----------------------------
+
+@router.get("/file-logs", summary="List all uploaded file ingestions")
+async def list_uploaded_files(user_id: str):
+    docs = await documents_collection.find({
+        "filename": {"$exists": True},
+        "user_id": user_id
+    }).to_list(100)
+
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])       # Convert ObjectId
+        doc.pop("file_data", None)         # Remove raw binary field if exists
+
+    return JSONResponse(content=jsonable_encoder(docs))
+
+# -----------------------------
+# List All Ingested URLs (url-logs)
+# -----------------------------
+
+@router.get("/url-logs", summary="List all URL ingestions")
+async def list_ingested_urls(user_id: str):
+    docs = await documents_collection.find({
+        "source": {"$exists": True},
+        "user_id": user_id
+    }).to_list(100)
+
+    cleaned_docs = [clean_mongo_document(doc) for doc in docs]
+    return JSONResponse(content=cleaned_docs)

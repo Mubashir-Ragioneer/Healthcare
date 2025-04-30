@@ -1,5 +1,9 @@
+# app/db/mongo.py
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from fastapi import Depends
+
 
 client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = client[settings.MONGODB_DB]
@@ -19,3 +23,6 @@ async def verify_mongodb_connection():
         print("✅ MongoDB Atlas connection established")
     except Exception as e:
         print(f"❌ MongoDB connection failed: {str(e)}")
+
+async def get_db() -> AsyncIOMotorDatabase:
+    return db

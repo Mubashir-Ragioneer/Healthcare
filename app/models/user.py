@@ -9,3 +9,7 @@ class User(BaseModel):
     email: EmailStr
     phone: Optional[str] = None
     created_at: Optional[datetime] = None
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
