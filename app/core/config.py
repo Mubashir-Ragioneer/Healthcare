@@ -43,5 +43,12 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(..., env="SECRET_KEY")  # ✅ Added for auth
     JWT_ALGORITHM: str = Field(default="HS256", env="JWT_ALGORITHM")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60 * 24, env="ACCESS_TOKEN_EXPIRE_MINUTES")
+    
+    # Kommo settings
+    KOMMO_CLIENT_ID: str = Field(..., env="KOMMO_CLIENT_ID")
+    KOMMO_CLIENT_SECRET: str = Field(..., env="KOMMO_CLIENT_SECRET")
+    KOMMO_SUBDOMAIN: str = Field(..., env="KOMMO_SUBDOMAIN")  # e.g. yourteam
+    KOMMO_REDIRECT_URI: str = Field(default="http://localhost:8000/kommo/auth/callback", env="KOMMO_REDIRECT_URI")
+
 
 settings = Settings()
