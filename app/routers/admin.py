@@ -1,15 +1,19 @@
-#  app/routers/admin.py
+# app/routers/admin.py
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
+from typing import List, Dict
+from app.models.appointment import AppointmentInDB
+from app.db.mongo import appointments_collection
+from app.services.kommo import push_appointment_to_kommo
+from app.services.feegow import forward_to_feegow
 
 router = APIRouter(
-    prefix="/llm",
-    tags=["llm"],  # ❌ Removed "admin"
+    prefix="/admin",
+    tags=["admin"],
 )
-
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
@@ -29,8 +33,7 @@ class LLMSettings(BaseModel):
             raise ValueError(f"Unsupported model: {v}")
         return v
 
-# GET route
-@router.get("/", response_model=LLMSettings, summary="Get current LLM settings")
+@router.get("/llm", response_model=LLMSettings, summary="Get current LLM settings")
 async def get_llm_settings():
     cfg = await llm_settings_collection.find_one({"_id": "config"})
     if not cfg:
@@ -38,8 +41,7 @@ async def get_llm_settings():
     cfg.pop("_id", None)
     return cfg
 
-# PUT route
-@router.put("/", response_model=LLMSettings, summary="Update LLM settings")
+@router.put("/llm", response_model=LLMSettings, summary="Update LLM settings")
 async def update_llm_settings(cfg: LLMSettings):
     await llm_settings_collection.update_one(
         {"_id": "config"},
@@ -47,3 +49,63 @@ async def update_llm_settings(cfg: LLMSettings):
         upsert=True
     )
     return cfg
+
+@router.get("/unsynced", response_model=List[AppointmentInDB], summary="View unsynced appointments")
+async def get_unsynced_appointments():
+    query = {
+        "$or": [
+            {"kommo_synced": {"$ne": True}},
+            {"feegow_synced": {"$ne": True}}
+        ]
+    }
+    docs = await appointments_collection.find(query).to_list(length=100)
+    return docs
+
+@router.post("/resync/{appointment_id}", response_model=AppointmentInDB, summary="Resync a failed appointment")
+async def resync_appointment(appointment_id: str):
+    rec = await appointments_collection.find_one({"id": appointment_id})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+
+    feegow_synced = False
+    kommo_synced = False
+
+    try:
+        print("📤 Resyncing to Feegow...")
+        await forward_to_feegow(rec)
+        feegow_synced = True
+        print("✅ Feegow resync successful.")
+    except Exception as e:
+        print(f"❌ Feegow resync failed: {e}")
+
+    try:
+        print("📤 Resyncing to Kommo...")
+        await push_appointment_to_kommo(rec)
+        kommo_synced = True
+        print("✅ Kommo resync successful.")
+    except Exception as e:
+        print(f"❌ Kommo resync failed: {e}")
+
+    await appointments_collection.update_one(
+        {"id": appointment_id},
+        {"$set": {
+            "feegow_synced": feegow_synced,
+            "kommo_synced": kommo_synced
+        }}
+    )
+
+    updated = await appointments_collection.find_one({"id": appointment_id})
+    return updated
+
+@router.get("/sync-report", summary="Get sync summary report")
+async def sync_report() -> Dict[str, int]:
+    total = await appointments_collection.count_documents({})
+    kommo_ok = await appointments_collection.count_documents({"kommo_synced": True})
+    feegow_ok = await appointments_collection.count_documents({"feegow_synced": True})
+    return {
+        "total_appointments": total,
+        "kommo_synced": kommo_ok,
+        "feegow_synced": feegow_ok,
+        "kommo_unsynced": total - kommo_ok,
+        "feegow_unsynced": total - feegow_ok
+    }

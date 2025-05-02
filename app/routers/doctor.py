@@ -6,7 +6,7 @@ from datetime import datetime
 from app.models.appointment import AppointmentCreate, AppointmentInDB
 from app.db.mongo import appointments_collection
 from app.services.feegow import forward_to_feegow
-
+from app.services.kommo import push_appointment_to_kommo
 
 # No prefix here—will be mounted under "/doctors" in main.py
 router = APIRouter(tags=["doctors"])
@@ -23,9 +23,6 @@ DOCTORS = [
     summary="List all available doctors",
 )
 async def list_doctors():
-    """
-    Return a list of all doctors with their ID, name, and specialization.
-    """
     return DOCTORS
 
 @router.post(
@@ -35,33 +32,48 @@ async def list_doctors():
     summary="Book an appointment with a doctor",
 )
 async def book_appointment(a: AppointmentCreate):
-    """
-    Create a new appointment for the given doctor.
-    - Validates that the doctor exists.
-    - Generates a simple appointment ID and timestamp.
-    - Persists the record to MongoDB.
-    """
-    # Check doctor exists
-    if not any(d["id"] == a.doctor_id for d in DOCTORS):
+    doctor = next((d for d in DOCTORS if d["id"] == a.doctor_id), None)
+    if not doctor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Doctor with id '{a.doctor_id}' not found."
         )
 
-    # Build the AppointmentInDB record
     rec = AppointmentInDB(
         **a.dict(by_alias=True),
+        doctor_name=doctor["name"],
+        specialization=doctor["specialization"],
         id=f"appt-{int(datetime.utcnow().timestamp())}",
         created_at=datetime.utcnow(),
     )
 
-    # Persist to MongoDB
     await appointments_collection.insert_one(rec.dict(by_alias=True))
-    try:
-        await forward_to_feegow(rec.dict())
-    except Exception as e:
-        print(f"⚠️ Feegow sync failed: {e}")
 
+    feegow_synced = False
+    try:
+        print("📤 Sending appointment to Feegow...")
+        await forward_to_feegow(rec.dict())
+        feegow_synced = True
+        print("✅ Feegow sync successful.")
+    except Exception as e:
+        print(f"❌ Feegow sync failed: {e}")
+
+    kommo_synced = False
+    try:
+        print("📤 Sending appointment to Kommo...")
+        push_appointment_to_kommo(rec.dict())
+        kommo_synced = True
+        print("✅ Kommo sync successful.")
+    except Exception as e:
+        print(f"❌ Kommo sync failed: {e}")
+
+    await appointments_collection.update_one(
+        {"id": rec.id},
+        {"$set": {
+            "feegow_synced": feegow_synced,
+            "kommo_synced": kommo_synced
+        }}
+    )
 
     return rec
 
@@ -71,9 +83,6 @@ async def book_appointment(a: AppointmentCreate):
     response_model=List[AppointmentInDB],
 )
 async def get_appointments():
-    """
-    Retrieve all booked doctor appointments from MongoDB.
-    """
     docs = await appointments_collection.find().to_list(length=100)
     return docs
 
@@ -83,8 +92,5 @@ async def get_appointments():
     response_model=List[AppointmentInDB],
 )
 async def get_appointments_for_user(user_id: str):
-    """
-    Retrieve all booked doctor appointments for a specific user from MongoDB.
-    """
     docs = await appointments_collection.find({"user_id": user_id}).to_list(length=100)
     return docs

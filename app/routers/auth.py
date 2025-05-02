@@ -1,3 +1,5 @@
+# app/routers/auth.py
+
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
@@ -54,27 +56,29 @@ async def signup(user: UserSignup):
 
 @router.post("/login", response_model=Token)
 async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
-    try:
-        print("🔍 Attempting login for:", user.email)
-        existing_user = await db["users"].find_one({"email": user.email})
-        print("📝 Found user:", existing_user)
-        
-        if not existing_user:
-            print("❌ User not found")
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+    print("🔍 Attempting login for:", user.email)
+    existing_user = await db["users"].find_one({"email": user.email})
+    print("📝 Found user:", existing_user)
+    
+    if not existing_user:
+        print("❌ User not found")
+        raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    try:
         print("🔑 Verifying password...")
         if not verify_password(user.password, existing_user["password"]):
             print("❌ Password verification failed")
             raise HTTPException(status_code=401, detail="Invalid credentials")
 
         print("✅ Creating access token...")
-        access_token = create_access_token(data={"sub": str(existing_user["_id"])})
+        access_token = create_access_token(data={
+            "sub": str(existing_user["_id"]),
+            "email": existing_user["email"]
+        })
         return {"access_token": access_token, "token_type": "bearer"}
 
     except Exception as e:
         print("🔥 Login error:", str(e))
-        print("🔥 Error type:", type(e).__name__)
         import traceback
         print("🔥 Stack trace:", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal Server Error")
