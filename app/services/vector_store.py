@@ -1,39 +1,56 @@
 # app/services/vector_store.py
 
 from typing import List
-from sentence_transformers import SentenceTransformer
 from app.db.pinecone import index
-from uuid import uuid4
+from app.core.config import settings
+from openai import OpenAI
+from concurrent.futures import ThreadPoolExecutor
+import asyncio
 
-# Load embedding model
-embedder = SentenceTransformer("intfloat/multilingual-e5-large")
+# OpenAI embedding setup
+client = OpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url=settings.OPENAI_BASE_URL
+)
+executor = ThreadPoolExecutor()
 
-CHUNK_SIZE = 300  # characters per chunk
-CHUNK_OVERLAP = 50
+# 🔧 Generate embedding asynchronously using a thread pool
+async def embed_text(text: str) -> List[float]:
+    loop = asyncio.get_event_loop()
+    res = await loop.run_in_executor(executor, lambda: client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    ))
+    return res.data[0].embedding
 
-def chunk_text(text: str) -> List[str]:
-    """
-    Splits large text into overlapping chunks for embedding.
-    """
+# 🧩 Chunking utility
+def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
     chunks = []
     start = 0
     while start < len(text):
-        end = min(start + CHUNK_SIZE, len(text))
+        end = min(len(text), start + chunk_size)
         chunks.append(text[start:end])
-        start += CHUNK_SIZE - CHUNK_OVERLAP
+        start += chunk_size - overlap
     return chunks
 
-def upsert_text_to_pinecone(doc_id: str, text: str):
-    """
-    Chunks, embeds, and upserts text into Pinecone.
-    """
+# 🚀 Upsert chunks with embeddings to Pinecone
+async def upsert_to_pinecone(doc_id: str, text: str, user_id: str) -> int:
     chunks = chunk_text(text)
-    embeddings = embedder.encode(chunks).tolist()
+    embeddings = await asyncio.gather(*[embed_text(chunk) for chunk in chunks])
 
-    vectors = [{
-        "id": f"{doc_id}-{i}",
-        "values": embeddings[i],
-        "metadata": {"chunk_text": chunks[i], "doc_id": doc_id}
-    } for i in range(len(chunks))]
+    vectors = [
+        {
+            "id": f"{doc_id}-{i}",
+            "values": embedding,
+            "metadata": {
+                "chunk_text": chunk,
+                "doc_id": doc_id,
+                "user_id": user_id
+            }
+        }
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
+    ]
 
     index.upsert(vectors)
+    print(f"📌 Upserted {len(vectors)} chunks to Pinecone for doc_id: {doc_id}")
+    return len(vectors)
