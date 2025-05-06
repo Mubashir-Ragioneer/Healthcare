@@ -8,6 +8,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 from app.models.appointment import AppointmentInDB
 from app.db.mongo import appointments_collection
+from app.db.mongo import users_collection
 from app.services.kommo import push_appointment_to_kommo
 from app.services.feegow import forward_to_feegow
 from app.routers.deps import require_admin
@@ -127,12 +128,16 @@ async def sync_report(current_user: dict = Depends(require_admin)):
         "feegow_unsynced": total - feegow_ok
     }
     return format_response(success=True, data={"sync_report": report})
-
-@router.post("/create-admin", summary="Create a new admin user")
+@router.post("/create-admin", summary="Create or promote an admin user")
 async def create_admin(user: UserCreate, current_user: dict = Depends(require_admin)):
     existing = await users_collection.find_one({"email": user.email})
+
     if existing:
-        raise HTTPException(status_code=400, detail="Email already exists")
+        await users_collection.update_one(
+            {"email": user.email},
+            {"$set": {"role": "admin"}}
+        )
+        return {"message": f"✅ User '{user.email}' promoted to admin"}
     
     hashed_password = pwd_context.hash(user.password)
     await users_collection.insert_one({
@@ -141,7 +146,6 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
         "role": "admin"
     })
     return {"message": f"✅ Admin user '{user.email}' created successfully"}
-
 
 @router.get("/me")
 async def whoami(current_user: dict = Depends(get_current_user)):
