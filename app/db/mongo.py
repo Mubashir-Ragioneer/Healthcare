@@ -16,6 +16,7 @@ exam_requests_collection = db.get_collection("exam_requests")
 quote_requests_collection = db.get_collection("quote_requests")
 url_ingestions_collection = db.get_collection("url_ingestions")
 kommo_tokens_collection = db.get_collection("kommo_tokens")
+users_collection = db.get_collection("users") 
 
 
 # Function to check DB connection
