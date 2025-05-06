@@ -1,15 +1,13 @@
 # app/services/kommo.py
 
-import json
 import os
+import json
 import requests
-from datetime import datetime
+from datetime import datetime as dt
+from dateutil.parser import parse
 
-# Path where token is saved
-KOMMO_TOKEN_FILE = os.path.join(os.path.dirname(__file__), "..", "kommo_token.json")
-KOMMO_TOKEN_FILE = os.path.abspath(KOMMO_TOKEN_FILE)
-
-SUBDOMAIN = "imf"  # Replace with your actual subdomain
+KOMMO_TOKEN_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "kommo_token.json"))
+SUBDOMAIN = "imf"
 
 
 def load_kommo_token():
@@ -21,57 +19,80 @@ def load_kommo_token():
         return json.load(f)
 
 
+def format_kommo_datetime(dt_obj):
+    return dt_obj.strftime("%Y-%m-%dT%H:%M:%S") + "+00:00"
+
+
 def push_appointment_to_kommo(appointment: dict):
     kommo_auth = load_kommo_token()
     if not kommo_auth or "access_token" not in kommo_auth:
         raise Exception("No Kommo token stored.")
 
-    url = f"https://{SUBDOMAIN}.kommo.com/api/v4/leads"
     headers = {
         "Authorization": f"Bearer {kommo_auth['access_token']}",
         "Content-Type": "application/json",
     }
 
-    # ✅ Corrected payload: name, price, created_at as scalars
-    payload = {
-        "name": [f"Appointment - {appointment.get('patient_name', 'Healthcare Appointment')}"],  # ✅ array
-        "price": [0],  # ✅ array
-        "created_at": [int(datetime.utcnow().timestamp())],  # ✅ array
+    # ✅ Parse dates
+    dt_str = appointment.get("datetime")
+    if not dt_str:
+        raise ValueError("Missing 'datetime' in appointment payload.")
+    dt_obj = parse(str(dt_str)) if not isinstance(dt_str, dt) else dt_str
+
+    name = appointment.get("patient_name", "Unknown Patient").strip()
+
+    # ✅ 1. Create Contact
+    contact_payload = [{
+        "first_name": name,
         "custom_fields_values": [
-                {
-                "field_code": "PHONE",
-                "values": [{"value": appointment.get("phone")}]
+            {"field_code": "PHONE", "values": [{"value": appointment["phone"]}]},
+            {"field_code": "EMAIL", "values": [{"value": appointment["email"]}]}
+        ]
+    }]
+    contact_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/contacts", headers=headers, json=contact_payload)
+    if not contact_res.ok:
+        print(f"❌ Contact creation failed: {contact_res.status_code}")
+        print(contact_res.text)
+        raise Exception("Contact creation failed")
+
+    contact_id = contact_res.json()['_embedded']['contacts'][0]['id']
+
+    # ✅ 2. Create Lead
+    lead_payload = [{
+        "name": f"Appointment - {name}",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,         # Atendimento
+        "status_id": 82549323,           # Agendamento concluído com êxito
+        "custom_fields_values": [
+            {
+                "field_id": 367116,      # Appointment datetime
+                "values": [{"value": format_kommo_datetime(dt_obj)}]
             },
             {
-                "field_code": "EMAIL",
-                "values": [{"value": appointment.get("email")}]
-            },
-            {
-                "field_id": 123456,  # Replace with actual field ID if needed
+                "field_id": 747486,      # Notes / problem
                 "values": [{"value": appointment.get("notes", "")}]
+            },
+            {
+                "field_id": 1011258,     # Virtual / Presencial
+                "values": [{"enum_id": 855226 if appointment.get("appointment_type") == "Virtual" else 855228}]
             }
         ],
         "_embedded": {
-            "contacts": [
-                {
-                    "first_name": appointment.get("patient_name", "Unknown")
-                }
-            ]
+            "contacts": [{"id": contact_id}]
         },
         "tags": [
             {"name": "healthcare"},
-            {"name": appointment.get("appointment_type", "general")}
+            {"name": appointment.get("appointment_type", "Unknown")}
         ]
-    }
+    }]
 
-    print("📡 Pushing appointment to Kommo...")
-    print("📦 Payload JSON:", json.dumps(payload, indent=2))
-    response = requests.post(url, headers=headers, json=payload)
-
-    if response.status_code in [200, 201]:
+    lead_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
+    if lead_res.status_code in [200, 201]:
         print("✅ Appointment pushed as Kommo Lead successfully!")
-        print(response.json())
+        print(lead_res.json())
+        return True  # ✅ NEW: indicate success to caller
     else:
-        print(f"❌ Failed to push lead. Status: {response.status_code}")
-        print(response.text)
-        raise Exception("Kommo lead push failed")
+        print(f"❌ Lead creation failed: {lead_res.status_code}")
+        print(lead_res.text)
+        raise Exception("Kommo lead creation failed")
