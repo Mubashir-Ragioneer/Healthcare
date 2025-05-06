@@ -47,7 +47,10 @@ async def book_appointment(a: AppointmentCreate):
         created_at=datetime.utcnow(),
     )
 
-    await appointments_collection.insert_one(rec.dict(by_alias=True))
+    # 👇 Set _id explicitly for future updates
+    doc = rec.dict(by_alias=True)
+    doc["_id"] = rec.id
+    await appointments_collection.insert_one(doc)
 
     feegow_synced = False
     try:
@@ -61,19 +64,20 @@ async def book_appointment(a: AppointmentCreate):
     kommo_synced = False
     try:
         print("📤 Sending appointment to Kommo...")
-        push_appointment_to_kommo(rec.dict())
+        push_appointment_to_kommo(rec.to_kommo_dict())
         kommo_synced = True
         print("✅ Kommo sync successful.")
     except Exception as e:
         print(f"❌ Kommo sync failed: {e}")
 
-    await appointments_collection.update_one(
-        {"id": rec.id},
+    update_result = await appointments_collection.update_one(
+        {"_id": rec.id},
         {"$set": {
             "feegow_synced": feegow_synced,
             "kommo_synced": kommo_synced
         }}
     )
+    print(f"📦 Updated sync flags in DB: {update_result.modified_count} modified")
 
     return rec
 

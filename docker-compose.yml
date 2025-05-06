@@ -9,3 +9,5 @@ services:
       - .env
     volumes:
       - .:/app
+    dns:
+      - 8.8.8.8  # ✅ Add this line to fix DNS resolution

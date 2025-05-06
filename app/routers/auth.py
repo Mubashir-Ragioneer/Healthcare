@@ -73,8 +73,10 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         print("✅ Creating access token...")
         access_token = create_access_token(data={
             "sub": str(existing_user["_id"]),
-            "email": existing_user["email"]
+            "email": existing_user["email"],
+            "role": existing_user.get("role", "user")  # ✅ add this line
         })
+
         return {"access_token": access_token, "token_type": "bearer"}
 
     except Exception as e:

@@ -12,6 +12,12 @@ from app.services.kommo import push_appointment_to_kommo
 from app.services.feegow import forward_to_feegow
 from app.routers.deps import require_admin
 from app.utils.responses import format_response  # ✅ uniform response wrapper
+from app.models.user import UserCreate
+from passlib.context import CryptContext
+from app.routers.deps import get_current_user
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -47,7 +53,8 @@ async def get_llm_settings(current_user: dict = Depends(require_admin)):
     if not cfg:
         raise HTTPException(status_code=404, detail="LLM config not set")
     cfg.pop("_id", None)
-    return format_response(data={"llm_settings": cfg})
+    return format_response(success=True, data={"llm_settings": cfg})
+
 
 @router.put("/llm", summary="Update LLM settings")
 async def update_llm_settings(
@@ -59,7 +66,7 @@ async def update_llm_settings(
         {"$set": cfg.dict()},
         upsert=True
     )
-    return format_response(data={"llm_settings": cfg.dict()}, message="LLM settings updated")
+    return format_response(success=True, data={"llm_settings": cfg.dict()}, message="LLM settings updated")
 
 @router.get("/unsynced", summary="View unsynced appointments")
 async def get_unsynced_appointments(current_user: dict = Depends(require_admin)):
@@ -70,7 +77,7 @@ async def get_unsynced_appointments(current_user: dict = Depends(require_admin))
         ]
     }
     docs = await appointments_collection.find(query).to_list(length=100)
-    return format_response(data={"unsynced_appointments": docs})
+    return format_response(success=True, data={"unsynced_appointments": docs})
 
 @router.post("/resync/{appointment_id}", summary="Resync a failed appointment")
 async def resync_appointment(
@@ -105,7 +112,7 @@ async def resync_appointment(
     )
 
     updated = await appointments_collection.find_one({"id": appointment_id})
-    return format_response(data={"appointment": updated}, message="Resync completed")
+    return format_response(success=True, data={"appointment": updated}, message="Resync completed")
 
 @router.get("/sync-report", summary="Get sync summary report")
 async def sync_report(current_user: dict = Depends(require_admin)):
@@ -119,4 +126,23 @@ async def sync_report(current_user: dict = Depends(require_admin)):
         "kommo_unsynced": total - kommo_ok,
         "feegow_unsynced": total - feegow_ok
     }
-    return format_response(data={"sync_report": report})
+    return format_response(success=True, data={"sync_report": report})
+
+@router.post("/create-admin", summary="Create a new admin user")
+async def create_admin(user: UserCreate, current_user: dict = Depends(require_admin)):
+    existing = await users_collection.find_one({"email": user.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already exists")
+    
+    hashed_password = pwd_context.hash(user.password)
+    await users_collection.insert_one({
+        "email": user.email,
+        "password": hashed_password,
+        "role": "admin"
+    })
+    return {"message": f"✅ Admin user '{user.email}' created successfully"}
+
+
+@router.get("/me")
+async def whoami(current_user: dict = Depends(get_current_user)):
+    return current_user
