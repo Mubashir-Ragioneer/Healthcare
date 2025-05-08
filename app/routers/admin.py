@@ -150,3 +150,27 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
 @router.get("/me")
 async def whoami(current_user: dict = Depends(get_current_user)):
     return current_user
+
+@router.get("/clinical-trials", summary="List clinical trial form submissions")
+async def list_clinical_trial_uploads(current_user: dict = Depends(require_admin)):
+    from app.db.mongo import db
+    collection = db["clinical_trial_uploads"]
+
+    uploads = await collection.find().sort("submitted_at", -1).to_list(length=100)
+    for u in uploads:
+        u["_id"] = str(u["_id"])
+        if "submitted_at" in u and hasattr(u["submitted_at"], "isoformat"):
+            u["submitted_at"] = u["submitted_at"].isoformat()
+
+    return format_response(success=True, data={"submissions": uploads})
+
+@router.post("/cleanup", summary="Manually trigger old file cleanup")
+async def cleanup_files(current_user: dict = Depends(require_admin)):
+    from app.services.cleanup import delete_old_files
+
+    deleted = delete_old_files()
+    return format_response(
+        success=True,
+        message=f"{len(deleted)} old file(s) deleted.",
+        data={"deleted_files": deleted}
+    )

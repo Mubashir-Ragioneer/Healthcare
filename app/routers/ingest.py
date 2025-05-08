@@ -30,7 +30,8 @@ async def upload_files(
         result = await process_file(file, user_id=user_id)
         results.append(result)
 
-    return format_response(data={"results": results})
+    return format_response(success=True, data={"results": results})
+
 
 # -----------------------------
 # Download File by ID

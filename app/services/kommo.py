@@ -4,6 +4,7 @@ import os
 import json
 import requests
 from datetime import datetime as dt
+import asyncio
 from dateutil.parser import parse
 
 KOMMO_TOKEN_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "kommo_token.json"))
@@ -96,3 +97,109 @@ def push_appointment_to_kommo(appointment: dict):
         print(f"❌ Lead creation failed: {lead_res.status_code}")
         print(lead_res.text)
         raise Exception("Kommo lead creation failed")
+
+def push_lead_to_kommo(data: dict):
+    kommo_auth = load_kommo_token()
+    if not kommo_auth or "access_token" not in kommo_auth:
+        raise Exception("No Kommo token stored.")
+
+    headers = {
+        "Authorization": f"Bearer {kommo_auth['access_token']}",
+        "Content-Type": "application/json",
+    }
+
+    name = data.get("user_id", "Unknown User")  # You may map to actual name later
+    message = data.get("message", "")
+    mode = data.get("mode", "find_specialist")
+    tag = "Find Specialist" if mode == "find_specialist" else "Find Test"
+
+    lead_payload = [{
+        "name": f"{tag} Inquiry",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,
+        "status_id": 82549323,
+        "custom_fields_values": [
+            {
+                "field_id": 747486,  # Notes / problem
+                "values": [{"value": message}]
+            }
+        ],
+        "tags": [
+            {"name": tag}
+        ]
+    }]
+
+    lead_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
+    if lead_res.status_code not in [200, 201]:
+        print("❌ Kommo Lead failed:", lead_res.text)
+        raise Exception("Kommo lead creation failed")
+
+    return True
+
+
+async def push_clinical_trial_lead(data: dict):
+    kommo_auth = load_kommo_token()
+    if not kommo_auth or "access_token" not in kommo_auth:
+        raise Exception("No Kommo token stored.")
+
+    headers = {
+        "Authorization": f"Bearer {kommo_auth['access_token']}",
+        "Content-Type": "application/json",
+    }
+
+    # Compose a rich note for Kommo from the form data
+    note_parts = [
+        f"Diagnosis: {data.get('diagnosis', 'N/A')}",
+        f"Medications: {data.get('medications', 'N/A')}",
+        f"Test Results Summary: {data.get('test_results_description', 'N/A')}"
+    ]
+
+    if data.get("uploaded_file_path"):
+        note_parts.append(f"Uploaded file: {os.path.basename(data['uploaded_file_path'])}")
+
+    note = "\n".join(note_parts)
+
+    lead_payload = [{
+        "name": f"Clinical Trial - {data['full_name']}",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,
+        "status_id": 82549323,
+        "custom_fields_values": [
+            {
+                "field_id": 747486,  # Notes field
+                "values": [{"value": note}]
+            }
+        ],
+        "tags": [
+            {"name": "Clinical Trial IBD"},
+            {"name": data.get("lead_source", "unknown")}
+        ]
+    }]
+
+    lead_res = requests.post(
+        f"https://{SUBDOMAIN}.kommo.com/api/v4/leads",
+        headers=headers,
+        json=lead_payload
+    )
+
+    if lead_res.status_code not in [200, 201]:
+        print("❌ Kommo Clinical Trial Lead failed:", lead_res.text)
+        raise Exception("Clinical Trial lead creation failed")
+
+    print("✅ Kommo Clinical Trial Lead submitted.")
+
+def post_to_google_sheets(form_data: dict):
+    SHEETS_WEBHOOK_URL = os.getenv("GOOGLE_SHEETS_WEBHOOK_URL")
+
+    if not SHEETS_WEBHOOK_URL:
+        print("⚠️ Sheets webhook not configured")
+        return
+
+    try:
+        response = requests.post(SHEETS_WEBHOOK_URL, json=form_data)
+        if not response.ok:
+            print("❌ Failed to send data to Google Sheets:", response.text)
+    except Exception as e:
+        print("❌ Exception while posting to Sheets:", str(e))
