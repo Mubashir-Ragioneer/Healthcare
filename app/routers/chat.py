@@ -1,12 +1,20 @@
 # app/routers/chat.py
-
+import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional
 from fastapi.responses import JSONResponse
 from uuid import uuid4
 from datetime import datetime
+from app.services.kommo import push_lead_to_kommo
 from app.services.chat_engine import chat_with_assistant, conversations
+from fastapi import Form, UploadFile, File
+from app.db.mongo import db
+from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
+
+
+
+UPLOAD_DIR = os.path.abspath("app/uploads")
 
 router = APIRouter(tags=["chat"])
 
@@ -22,6 +30,8 @@ class ChatRequest(BaseModel):
     messages: List[Message]
     user_id: str
     conversation_id: str
+    mode: Optional[str] = "ask_anything"  # ask_anything, find_specialist, find_test, have_ibd
+
 
 class ChatResponse(BaseModel):
     reply: str
@@ -37,14 +47,29 @@ class NewChatResponse(BaseModel):
 # ---------------------
 # Chat Routes
 # ---------------------
-
 @router.post("/", response_model=ChatResponse, summary="Send a message and receive a reply")
 async def chat_endpoint(request: ChatRequest):
     try:
         msgs = [msg.dict() for msg in request.messages]
-        result = await chat_with_assistant(msgs, request.user_id, request.conversation_id)
 
-        return ChatResponse(reply=result["reply"], chat_title=result["chat_title"])
+        if request.mode == "ask_anything":
+            result = await chat_with_assistant(msgs, request.user_id, request.conversation_id)
+            return ChatResponse(reply=result["reply"], chat_title=result["chat_title"])
+
+        elif request.mode in ["find_specialist", "find_test"]:
+            # Trigger human handover via Kommo
+            await push_lead_to_kommo({
+                "user_id": request.user_id,
+                "message": msgs[-1]["content"],
+                "mode": request.mode
+            })
+            return ChatResponse(
+                reply="Thank you! A human assistant will be with you shortly.",
+                chat_title="Human Handoff"
+            )
+
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported mode")
 
     except Exception as e:
         import traceback
@@ -88,3 +113,56 @@ async def get_chat_history(conversation_id: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Server error while retrieving chat history")
+
+@router.post("/clinical-trial", summary="Submit clinical trial intake form")
+async def submit_clinical_trial(
+    full_name: str = Form(...),
+    diagnosis: str = Form(...),
+    medications: Optional[str] = Form(""),
+    test_results_description: Optional[str] = Form(""),
+    lead_source: Optional[str] = Form("nudii.com.br"),
+    test_results_file: Optional[UploadFile] = File(None),
+):
+    try:
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        file_path = None
+
+        # Save the uploaded file
+        if test_results_file:
+            ext = test_results_file.filename.split(".")[-1]
+            filename = f"{uuid4()}.{ext}"
+            file_path = os.path.join(UPLOAD_DIR, filename)
+
+            with open(file_path, "wb") as f:
+                content = await test_results_file.read()
+                f.write(content)
+
+        # Build form data
+        form_data = {
+            "full_name": full_name,
+            "diagnosis": diagnosis,
+            "medications": medications,
+            "test_results_description": test_results_description,
+            "lead_source": lead_source,
+            "uploaded_file_path": file_path
+        }
+        uploads_collection = db["clinical_trial_uploads"]
+
+        await uploads_collection.insert_one({
+            "full_name": full_name,
+            "diagnosis": diagnosis,
+            "medications": medications,
+            "test_results_description": test_results_description,
+            "lead_source": lead_source,
+            "file_path": file_path,
+            "submitted_at": datetime.utcnow()
+        })
+
+        await push_clinical_trial_lead(form_data)
+        post_to_google_sheets(form_data)
+
+        return {"message": "Submitted successfully!"}
+
+    except Exception as e:
+        print("❌ Error in /clinical-trial:", str(e))
+        raise HTTPException(status_code=500, detail="Submission failed")

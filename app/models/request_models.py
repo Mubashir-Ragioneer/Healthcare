@@ -25,3 +25,10 @@ class QuoteRequest(BaseModel):
     service_needed: str
     details: Optional[str] = ""
     created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+
+class ClinicalTrialForm(BaseModel):
+    full_name: str
+    diagnosis: str  # Crohn’s or Ulcerative Colitis
+    medications: Optional[str] = ""
+    test_results_description: Optional[str] = ""
+    lead_source: Optional[str] = "nudii.com.br"

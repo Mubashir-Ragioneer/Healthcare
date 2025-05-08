@@ -9,6 +9,7 @@ from uuid import uuid4
 from typing import List, Dict, Any, Optional
 import asyncio
 import json
+import os
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
@@ -27,8 +28,15 @@ def generate_timestamped_msgs(messages: List[Dict[str, Any]]) -> List[Dict[str, 
         for msg in messages
     ]
 
-async def get_llm_settings() -> dict:
-    return await db["llm_settings"].find_one({"_id": "config"}) or {}
+async def get_llm_config() -> dict:
+    cfg = await db["llm_settings"].find_one({"_id": "config"}) or {}
+
+    return {
+        "model": cfg.get("model", "gpt-4o"),
+        "temperature": cfg.get("temperature", 0.3),
+        "max_tokens": cfg.get("max_tokens", 400),
+        "prompt": cfg.get("prompt", "You are a helpful healthcare assistant. Always reply in JSON format: {\"reply\": ..., \"chat_title\": ...}")
+    }
 
 async def chat_with_assistant(
     messages: List[Dict[str, Any]],
@@ -42,48 +50,37 @@ async def chat_with_assistant(
     context_chunks = [match["metadata"]["chunk_text"] for match in matches]
 
     # ⚙️ Model settings
-    llm_config = await get_llm_settings()
-    model = llm_config.get("model", "gpt-4o")
-    temperature = llm_config.get("temperature", 0.3)
-    max_tokens = llm_config.get("max_tokens", 400)
+    cfg = await get_llm_config()
 
-    # 🧠 System prompt
+    # 🧠 System prompt with context
+    context_block = "\n--\n".join(context_chunks[:3])
     system_prompt = {
         "role": "system",
-        "content": """You are a helpful healthcare assistant.
-
-        Always respond in **this exact JSON format**:
-
-        {
-            "reply": "your helpful reply",
-            "chat_title": "brief title like 'Fever Symptoms' or 'New Conversation'"
-        }
-        Do not include anything else except this JSON response.
-
-        Relevant context:\n""" + "\n--\n".join(context_chunks[:3]
-        )
+        "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"
     }
 
-    # 👇 Optionally fetch previous conversation
+    # ⏪ Optional: include prior conversation
     prior_messages = []
     if conversation_id:
         convo = await conversations.find_one({"conversation_id": conversation_id})
         if convo and "messages" in convo:
             prior_messages = convo["messages"]
 
+    # 📨 Compose final message sequence
     final_messages = [system_prompt] + prior_messages + messages
 
     try:
         response = client.chat.completions.create(
-            model=model,
+            model=cfg["model"],
             messages=final_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            temperature=cfg["temperature"],
+            max_tokens=cfg["max_tokens"]
         )
     except Exception as e:
         print("❌ OpenAI API error:", str(e))
         raise RuntimeError("LLM call failed")
 
+    # 📦 Parse structured JSON reply
     reply_raw = response.choices[0].message.content
     print("🪵 Raw LLM response:", repr(reply_raw))
 
@@ -97,6 +94,7 @@ async def chat_with_assistant(
         print("❌ Failed to parse JSON:", str(e))
         raise RuntimeError("Invalid JSON from LLM")
 
+    # 🧾 Save messages with timestamps
     timestamped_msgs = generate_timestamped_msgs(messages)
     reply_msg = {
         "role": "assistant",
@@ -114,15 +112,15 @@ async def chat_with_assistant(
                 }
             )
         else:
-            new_conversation_id = str(uuid4())
-            await conversations.insert_one({
-                "conversation_id": new_conversation_id,
+            new_convo = {
+                "conversation_id": str(uuid4()),
                 "user_id": user_id,
                 "chat_title": chat_title,
                 "created_at": datetime.utcnow(),
                 "last_updated": datetime.utcnow(),
                 "messages": timestamped_msgs + [reply_msg]
-            })
+            }
+            await conversations.insert_one(new_convo)
 
     asyncio.create_task(log_to_db())
 

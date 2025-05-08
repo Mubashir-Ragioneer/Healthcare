@@ -1,52 +1,92 @@
-# app/routers/documents.py
+# app/routers/urls.py
 
-from fastapi import APIRouter, HTTPException, Query
-from motor.motor_asyncio import AsyncIOMotorClient
+from fastapi import APIRouter, Form, HTTPException, Depends
+from pydantic import BaseModel
+from datetime import datetime
+from typing import List
 from bson import ObjectId
-from app.core.config import settings
+
+from app.db.mongo import db
 from app.db.pinecone import index
+from app.services.file_ingestor import process_url
 from app.routers.deps import get_current_user
-from fastapi import Depends
+from app.utils.responses import format_response
 
+router = APIRouter(prefix="/url", tags=["urls"])
+urls_collection = db["urls"]
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+# --------------------
+# Schemas
+# --------------------
 
-# MongoDB setup
-mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
-db = mongo_client[settings.MONGODB_DB]
-documents = db["documents"]
+class URLIngestionResponse(BaseModel):
+    document_id: str
+    url: str
+    content: str
+    timestamp: datetime
 
-# Helper to convert Mongo document
-def doc_to_dict(doc):
-    doc["document_id"] = str(doc["_id"])
-    doc.pop("_id", None)
-    doc.pop("file_data", None)  # avoid binary overload
+class URLIngestionEntry(BaseModel):
+    url: str
+    content: str
+    timestamp: datetime
+
+# --------------------
+# Helpers
+# --------------------
+
+def clean_doc(doc):
+    doc["_id"] = str(doc["_id"])
+    if isinstance(doc.get("created_at"), datetime):
+        doc["created_at"] = doc["created_at"].isoformat()
     return doc
 
+# --------------------
+# Routes
+# --------------------
 
-@router.get("/", summary="List all documents for a user")
-async def list_documents(current_user: dict = Depends(get_current_user)):
+@router.post("/", summary="Ingest a public URL")
+async def ingest_url(
+    url: str = Form(...),
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user["user_id"]
-    docs = await documents.find({"user_id": user_id}).to_list(length=100)
-    return [doc_to_dict(doc) for doc in docs]
-@router.get("/{document_id}", summary="Get document metadata by ID")
-async def get_document(document_id: str):
-    doc = await documents.find_one({"_id": ObjectId(document_id)})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return doc_to_dict(doc)
+    result = await process_url(url, user_id=user_id)
 
-@router.delete("/{document_id}", summary="Delete a document and its Pinecone chunks")
-async def delete_document(document_id: str):
-    doc = await documents.find_one({"_id": ObjectId(document_id)})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    return format_response(
+        success=True,
+        data={
+            "document_id": result["document_id"],
+            "url": result["source"],
+            "content": result["text_snippet"],
+            "timestamp": datetime.utcnow()
+        },
+        message="URL ingested successfully"
+    )
+    
+@router.get("/logs", summary="List all ingested URL documents")
+async def list_full_url_docs(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["user_id"]
+    docs = await urls_collection.find({"user_id": user_id}).to_list(100)
 
-    # Delete from Mongo
-    await documents.delete_one({"_id": ObjectId(document_id)})
+    return format_response(
+        success=True,
+        data={"documents": [clean_doc(doc) for doc in docs]},
+        message="Fetched full URL logs"
+    )
 
-    # Attempt to delete up to 1000 possible chunk IDs
+@router.delete("/{document_id}", summary="Delete a URL and its Pinecone chunks")
+async def delete_url(
+    document_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    doc = await urls_collection.find_one({"_id": ObjectId(document_id)})
+    if not doc or doc.get("user_id") != current_user["user_id"]:
+        raise HTTPException(status_code=404, detail="URL document not found or access denied")
+
+    await urls_collection.delete_one({"_id": ObjectId(document_id)})
+
+    # Optional: delete up to 1000 chunked vectors
     pinecone_ids = [f"{document_id}-{i}" for i in range(1000)]
     index.delete(ids=pinecone_ids)
 
-    return {"message": "Document and chunks deleted successfully"}
+    return format_response(success=True, message="URL document and vectors deleted successfully")

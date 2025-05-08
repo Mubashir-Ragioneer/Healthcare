@@ -34,7 +34,7 @@ def doc_to_dict(doc):
 async def list_documents(current_user: dict = Depends(get_current_user)):
     user_id = current_user["user_id"]
     docs = await documents.find({"user_id": user_id}).to_list(length=100)
-    return format_response(data={"documents": [doc_to_dict(doc) for doc in docs]})
+    return format_response(success=True, data={"documents": [doc_to_dict(doc) for doc in docs]})
 
 @router.get("/{document_id}", summary="Get document metadata by ID")
 async def get_document(document_id: str):
@@ -42,7 +42,8 @@ async def get_document(document_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    return format_response(data={"document": doc_to_dict(doc)})
+    return format_response(success=True, data={"document": doc_to_dict(doc)})
+
 
 @router.delete("/{document_id}", summary="Delete a document and its Pinecone chunks")
 async def delete_document(document_id: str):
@@ -55,4 +56,5 @@ async def delete_document(document_id: str):
     pinecone_ids = [f"{document_id}-{i}" for i in range(1000)]
     index.delete(ids=pinecone_ids)
 
-    return format_response(message="Document and chunks deleted successfully")
+    return format_response(success=True, message="Document and chunks deleted successfully")
+
