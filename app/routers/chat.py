@@ -1,6 +1,6 @@
 # app/routers/chat.py
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Body
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional
 from fastapi.responses import JSONResponse
@@ -121,47 +121,48 @@ async def submit_clinical_trial(
     medications: Optional[str] = Form(""),
     test_results_description: Optional[str] = Form(""),
     lead_source: Optional[str] = Form("nudii.com.br"),
-    test_results_file: Optional[UploadFile] = File(None),
+    test_results_file: Optional[UploadFile] = File(
+        default=None,
+        description="Optional: upload test result file (PDF, image, etc.)"
+    ),
 ):
     try:
+        # Ensure upload directory exists
         os.makedirs(UPLOAD_DIR, exist_ok=True)
-        file_path = None
 
-        # Save the uploaded file
+        # Handle file upload
+        file_path = None
         if test_results_file:
             ext = test_results_file.filename.split(".")[-1]
             filename = f"{uuid4()}.{ext}"
             file_path = os.path.join(UPLOAD_DIR, filename)
-
             with open(file_path, "wb") as f:
-                content = await test_results_file.read()
-                f.write(content)
+                f.write(await test_results_file.read())
 
-        # Build form data
+        # Prepare data
         form_data = {
             "full_name": full_name,
             "diagnosis": diagnosis,
             "medications": medications,
             "test_results_description": test_results_description,
             "lead_source": lead_source,
-            "uploaded_file_path": file_path
+            "uploaded_file_path": file_path,
         }
-        uploads_collection = db["clinical_trial_uploads"]
 
-        await uploads_collection.insert_one({
-            "full_name": full_name,
-            "diagnosis": diagnosis,
-            "medications": medications,
-            "test_results_description": test_results_description,
-            "lead_source": lead_source,
-            "file_path": file_path,
+        # Save in MongoDB
+        await db["clinical_trial_uploads"].insert_one({
+            **form_data,
             "submitted_at": datetime.utcnow()
         })
 
+        # Send to integrations
         await push_clinical_trial_lead(form_data)
         post_to_google_sheets(form_data)
 
-        return {"message": "Submitted successfully!"}
+        return {
+            "success": True,
+            "message": "Clinical trial form submitted successfully"
+        }
 
     except Exception as e:
         print("❌ Error in /clinical-trial:", str(e))

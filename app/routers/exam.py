@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
 from app.db.mongo import exam_requests_collection
+from app.services.kommo import push_exam_lead_to_kommo  
 
 router = APIRouter(tags=["exam"])
 
@@ -19,6 +20,12 @@ async def schedule_exam(req: ExamScheduleRequest):
     doc = req.dict()
     doc["created_at"] = datetime.utcnow()
     await exam_requests_collection.insert_one(doc)
+
+    try:
+        push_exam_lead_to_kommo(doc)  # ⬅️ Push to Kommo
+    except Exception as e:
+        print("❌ Kommo sync failed:", str(e))
+
     return {"message": "✅ Exam scheduled successfully."}
 
 @router.get("/schedule", response_model=List[ExamScheduleRequest])

@@ -7,6 +7,7 @@ from datetime import datetime as dt
 import asyncio
 from dateutil.parser import parse
 
+
 KOMMO_TOKEN_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "kommo_token.json"))
 SUBDOMAIN = "imf"
 
@@ -203,3 +204,138 @@ def post_to_google_sheets(form_data: dict):
             print("❌ Failed to send data to Google Sheets:", response.text)
     except Exception as e:
         print("❌ Exception while posting to Sheets:", str(e))
+
+
+
+async def push_user_message_to_kommo(user_id: str, message: str, mode: str):
+    lead_data = {
+        "name": f"{mode} | user_id: {user_id}",
+        "custom_fields_values": [...],
+        "tags": [{"name": "Live Chat"}],
+        "created_at": int(datetime.utcnow().timestamp())
+    }
+    # (1) Create or update lead
+    # (2) Save lead_id for webhook matching later
+
+    # Optional: Add the message as a note
+    await post_note_to_lead(lead_id, f"[{mode}] {message}")
+
+
+def push_exam_lead_to_kommo(data: dict):
+    kommo_auth = load_kommo_token()
+    if not kommo_auth or "access_token" not in kommo_auth:
+        raise Exception("No Kommo token stored.")
+
+    headers = {
+        "Authorization": f"Bearer {kommo_auth['access_token']}",
+        "Content-Type": "application/json",
+    }
+
+    lead_payload = [{
+        "name": f"Exam - {data['specialization']} ({data['exam_type']})",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,  # Adjust as needed
+        "status_id": 82549323,    # Adjust as needed
+        "custom_fields_values": [
+            {
+                "field_id": 367116,  # datetime
+                "values": [{"value": format_kommo_datetime(data["scheduled_time"])}]
+            },
+            {
+                "field_id": 747486,  # purpose / notes
+                "values": [{"value": data.get("purpose", "") }]
+            }
+        ],
+        "tags": [
+            {"name": "Exam Request"},
+            {"name": data.get("specialization", "Unknown")}
+        ]
+    }]
+
+    res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
+    if res.status_code not in [200, 201]:
+        print("❌ Kommo exam lead creation failed:", res.text)
+        raise Exception("Failed to create Kommo exam lead")
+    print("✅ Kommo Exam Lead submitted.")
+
+
+def load_kommo_token():
+    if not os.path.exists(KOMMO_TOKEN_FILE):
+        print("⚠️ Kommo token file not found.")
+        return None
+    with open(KOMMO_TOKEN_FILE, "r") as f:
+        print("📥 Loading Kommo token from file...")
+        return json.load(f)
+
+def push_receptionist_request_to_kommo(data: dict):
+    kommo_auth = load_kommo_token()
+    if not kommo_auth or "access_token" not in kommo_auth:
+        raise Exception("No Kommo token stored.")
+
+    headers = {
+        "Authorization": f"Bearer {kommo_auth['access_token']}",
+        "Content-Type": "application/json",
+    }
+
+    note = f"User wants to speak to a receptionist.\nName: {data['name']}\nPhone: {data['phone']}\nReason: {data['reason']}"
+
+    lead_payload = [{
+        "name": f"Receptionist - {data['name']}",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,
+        "status_id": 82549323,
+        "custom_fields_values": [
+            {
+                "field_id": 747486,  # Descrição do Problema do Paciente
+                "values": [{"value": note}]
+            }
+        ],
+        "tags": [
+            {"name": "Receptionist Request"}
+        ]
+    }]
+
+    res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
+    if res.status_code not in [200, 201]:
+        print("❌ Kommo receptionist lead failed:", res.text)
+        raise Exception("Failed to create Kommo receptionist lead")
+
+    print("✅ Kommo Receptionist Lead submitted.")
+
+def push_quote_to_kommo(data: dict):
+    kommo_auth = load_kommo_token()
+    if not kommo_auth or "access_token" not in kommo_auth:
+        raise Exception("No Kommo token stored.")
+
+    headers = {
+        "Authorization": f"Bearer {kommo_auth['access_token']}",
+        "Content-Type": "application/json",
+    }
+
+    # Compose the lead payload
+    note = f"Category: {data['category']}\nSubcategory: {data['subcategory']}\nDetails: {data['details']}"
+
+    lead_payload = [{
+        "name": f"Quotation - {data['category']} | {data['subcategory']}",
+        "price": 0,
+        "created_at": int(dt.utcnow().timestamp()),
+        "pipeline_id": 10765347,  # Adjust if needed
+        "status_id": 82549323,    # Adjust if needed
+        "custom_fields_values": [
+            {
+                "field_id": 747486,  # Notes field
+                "values": [{"value": note}]
+            }
+        ],
+        "tags": [
+            {"name": "Quotation Request"}
+        ]
+    }]
+
+    res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
+    if res.status_code not in [200, 201]:
+        print("❌ Kommo quotation lead creation failed:", res.text)
+        raise Exception("Failed to create Kommo quotation lead")
+    print("✅ Kommo Quotation Lead submitted.")
