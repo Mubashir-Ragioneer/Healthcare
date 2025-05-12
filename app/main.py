@@ -5,10 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.routers import ingest
-
 from app.routers import (
     auth, admin, chat, doctor, ingest,
-    receptionist, exam, quotation, chat_admin, documents, urls
+    receptionist, exam, quotation, chat_admin, documents, urls, simple_chat
 )
 from app.db.mongo import client, verify_mongodb_connection
 from app.core.config import settings
@@ -87,3 +86,4 @@ app.include_router(quotation.router,    prefix="/quote")
 app.include_router(documents.router)
 app.include_router(chat_admin.router)
 app.include_router(urls.router)
+app.include_router(simple_chat.router,  prefix="/chat")
