@@ -48,12 +48,13 @@ async def chat_with_assistant(
     # 🔍 Retrieve semantic context
     matches = await search_similar_chunks(query, user_id=user_id)
     context_chunks = [match["metadata"]["chunk_text"] for match in matches]
-
+    
     # ⚙️ Model settings
     cfg = await get_llm_config()
 
     # 🧠 System prompt with context
     context_block = "\n--\n".join(context_chunks[:3])
+    #print(context_block)
     system_prompt = {
         "role": "system",
         "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"

@@ -8,6 +8,7 @@ from app.core.config import settings
 import jwt
 from datetime import datetime, timedelta
 from app.db.mongo import get_db
+from typing import Literal
 
 
 router = APIRouter(tags=["auth"])
@@ -23,16 +24,16 @@ SECRET_KEY = settings.SECRET_KEY
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
-
-
 class Token(BaseModel):
     access_token: str
     token_type: str
 
-
 class UserSignup(BaseModel):
+    full_name: str
     email: EmailStr
+    phone_number: str
     password: str
+    diagnosis: Literal["crohns", "colitis", "undiagnosed"]
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -49,9 +50,16 @@ async def signup(user: UserSignup):
     existing = await users_collection.find_one({"email": user.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     hashed_password = pwd_context.hash(user.password)
-    await users_collection.insert_one({"email": user.email, "password": hashed_password})
+    await users_collection.insert_one({
+        "full_name": user.full_name,
+        "email": user.email,
+        "phone_number": user.phone_number,
+        "diagnosis": user.diagnosis,
+        "password": hashed_password,
+        "created_at": datetime.utcnow()
+    })
     return {"message": "User registered successfully"}
 
 @router.post("/login", response_model=Token)
@@ -59,7 +67,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
     print("🔍 Attempting login for:", user.email)
     existing_user = await db["users"].find_one({"email": user.email})
     print("📝 Found user:", existing_user)
-    
+
     if not existing_user:
         print("❌ User not found")
         raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -74,7 +82,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         access_token = create_access_token(data={
             "sub": str(existing_user["_id"]),
             "email": existing_user["email"],
-            "role": existing_user.get("role", "user")  # ✅ add this line
+            "role": existing_user.get("role", "user")
         })
 
         return {"access_token": access_token, "token_type": "bearer"}
