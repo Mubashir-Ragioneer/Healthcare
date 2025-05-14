@@ -21,13 +21,12 @@ async def get_embedding(query: str) -> List[float]:
     ))
     return response.data[0].embedding
 
-async def search_similar_chunks(query: str, user_id: str, top_k: int = 3) -> List[dict]:
+async def search_similar_chunks(query: str, top_k: int = 3) -> List[dict]:
     """Search Pinecone for chunks similar to the query, scoped by user_id."""
     query_vector = await get_embedding(query)
     search_result = index.query(
         vector=query_vector,
         top_k=top_k,
-        include_metadata=True,
-        filter={"user_id": user_id}
+        include_metadata=True
     )
     return search_result["matches"]

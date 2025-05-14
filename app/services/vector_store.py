@@ -34,7 +34,7 @@ def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]
     return chunks
 
 # 🚀 Upsert chunks with embeddings to Pinecone
-async def upsert_to_pinecone(doc_id: str, text: str, user_id: str) -> int:
+async def upsert_to_pinecone(doc_id: str, text: str) -> int:
     chunks = chunk_text(text)
     embeddings = await asyncio.gather(*[embed_text(chunk) for chunk in chunks])
 
@@ -44,8 +44,7 @@ async def upsert_to_pinecone(doc_id: str, text: str, user_id: str) -> int:
             "values": embedding,
             "metadata": {
                 "chunk_text": chunk,
-                "doc_id": doc_id,
-                "user_id": user_id
+                "doc_id": doc_id
             }
         }
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))

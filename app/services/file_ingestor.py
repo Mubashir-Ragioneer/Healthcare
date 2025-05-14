@@ -103,7 +103,8 @@ async def process_file(file: UploadFile, user_id: str) -> dict:
         result = await documents.insert_one(doc_record)
         logger.info(f"✅ Inserted document {result.inserted_id} into MongoDB (documents)")
 
-        asyncio.create_task(upsert_to_pinecone(str(result.inserted_id), text, user_id))
+        asyncio.create_task(upsert_to_pinecone(str(result.inserted_id), text))
+
 
         return {
             "document_id": str(result.inserted_id),
@@ -137,7 +138,9 @@ async def process_url(url: str, user_id: str) -> dict:
         result = await urls.insert_one(doc_record)
         logger.info(f"✅ Inserted URL {result.inserted_id} into MongoDB (urls)")
 
-        chunk_count = await upsert_to_pinecone(str(result.inserted_id), content, user_id)
+        # asyncio.create_task(upsert_to_pinecone(str(result.inserted_id), content))
+
+        chunk_count = await upsert_to_pinecone(str(result.inserted_id), content)
 
         return {
             "document_id": str(result.inserted_id),

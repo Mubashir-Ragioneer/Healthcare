@@ -30,7 +30,7 @@ class ChatRequest(BaseModel):
     messages: List[Message]
     user_id: str
     conversation_id: str
-    mode: Optional[str] = "ask_anything"  # ask_anything, find_specialist, find_test, have_ibd
+    #mode: Optional[str] = "ask_anything"  # ask_anything, find_specialist, find_test, have_ibd
 
 
 class ChatResponse(BaseModel):
@@ -52,24 +52,16 @@ async def chat_endpoint(request: ChatRequest):
     try:
         msgs = [msg.dict() for msg in request.messages]
 
-        if request.mode == "ask_anything":
-            result = await chat_with_assistant(msgs, request.user_id, request.conversation_id)
-            return ChatResponse(reply=result["reply"], chat_title=result["chat_title"])
+        result = await chat_with_assistant(
+            messages=msgs,
+            user_id=request.user_id,
+            conversation_id=request.conversation_id
+        )
 
-        elif request.mode in ["find_specialist", "find_test"]:
-            # Trigger human handover via Kommo
-            await push_lead_to_kommo({
-                "user_id": request.user_id,
-                "message": msgs[-1]["content"],
-                "mode": request.mode
-            })
-            return ChatResponse(
-                reply="Thank you! A human assistant will be with you shortly.",
-                chat_title="Human Handoff"
-            )
-
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported mode")
+        return ChatResponse(
+            reply=result["reply"],
+            chat_title=result["chat_title"]
+        )
 
     except Exception as e:
         import traceback
