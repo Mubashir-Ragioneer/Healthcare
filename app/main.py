@@ -7,10 +7,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.routers import ingest
 from app.routers import (
     auth, admin, chat, doctor, ingest,
-    receptionist, exam, quotation, chat_admin, documents, urls, simple_chat
+    receptionist, exam, quotation, documents, urls, simple_chat, vector_admin
 )
 from app.db.mongo import client, verify_mongodb_connection
 from app.core.config import settings
+
 
 # 🔧 Global response wrapper
 def format_error_response(exc, status_code=500):
@@ -84,6 +85,8 @@ app.include_router(receptionist.router, prefix="/reception")
 app.include_router(exam.router,         prefix="/exam")
 app.include_router(quotation.router,    prefix="/quote")
 app.include_router(documents.router)
-app.include_router(chat_admin.router)
+# app.include_router(chat_admin.router)
 app.include_router(urls.router)
 app.include_router(simple_chat.router,  prefix="/chat")
+
+app.include_router(vector_admin.router)

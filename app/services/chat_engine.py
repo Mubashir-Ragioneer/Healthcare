@@ -46,7 +46,7 @@ async def chat_with_assistant(
     query = messages[-1]["content"]
 
     # 🔍 Retrieve semantic context
-    matches = await search_similar_chunks(query, user_id=user_id)
+    matches = await search_similar_chunks(query)
     context_chunks = [match["metadata"]["chunk_text"] for match in matches]
     
     # ⚙️ Model settings
@@ -54,7 +54,7 @@ async def chat_with_assistant(
 
     # 🧠 System prompt with context
     context_block = "\n--\n".join(context_chunks[:3])
-    #print(context_block)
+    print("retrieval:", context_block)
     system_prompt = {
         "role": "system",
         "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"

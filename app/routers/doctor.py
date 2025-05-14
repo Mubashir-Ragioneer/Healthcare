@@ -1,29 +1,19 @@
 # app/routers/doctor.py
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends
 from typing import List
 from datetime import datetime
 from app.models.appointment import AppointmentCreate, AppointmentInDB
 from app.db.mongo import appointments_collection
+from app.routers.deps import get_current_user
 from app.services.feegow import forward_to_feegow
 from app.services.kommo import push_appointment_to_kommo
+from app.db.mongo import db
+from fastapi.responses import JSONResponse
 
-# No prefix here—will be mounted under "/doctors" in main.py
 router = APIRouter(tags=["doctors"])
+doctors_collection = db["doctors"]
 
-# In-memory doctor directory
-DOCTORS = [
-    {"id": "doc-1", "name": "Dr. Sarah Malik", "specialization": "Cardiology"},
-    {"id": "doc-2", "name": "Dr. Ahmed Raza", "specialization": "Dermatology"},
-]
-
-@router.get(
-    "/",
-    response_model=List[dict],
-    summary="List all available doctors",
-)
-async def list_doctors():
-    return DOCTORS
 
 @router.post(
     "/book",
@@ -32,7 +22,7 @@ async def list_doctors():
     summary="Book an appointment with a doctor",
 )
 async def book_appointment(a: AppointmentCreate):
-    doctor = next((d for d in DOCTORS if d["id"] == a.doctor_id), None)
+    doctor = await doctors_collection.find_one({"id": a.doctor_id})
     if not doctor:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -82,13 +72,17 @@ async def book_appointment(a: AppointmentCreate):
     return rec
 
 @router.get(
-    "/appointments",
-    summary="List all booked appointments",
-    response_model=List[AppointmentInDB],
+    "/",
+    summary="List all available doctors from MongoDB (safe)",
 )
-async def get_appointments():
-    docs = await appointments_collection.find().to_list(length=100)
-    return docs
+async def list_doctors():
+    docs = await doctors_collection.find().to_list(length=100)
+
+    for doc in docs:
+        doc["_id"] = str(doc["_id"])  # or doc.pop("_id")
+
+    return JSONResponse(content=docs)
+
 
 @router.get(
     "/appointments/{user_id}",
