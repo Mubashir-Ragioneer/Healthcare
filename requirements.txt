@@ -66,3 +66,5 @@ pillow==10.3.0
 poppler-utils  # ⚠️ system dependency, not a pip package
 PyJWT==2.8.0
 pydantic[email]
+authlib
+itsdangerous==2.1.2

@@ -7,7 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.routers import ingest
 from app.routers import (
     auth, admin, chat, doctor, ingest,
-    receptionist, exam, quotation, documents, urls, simple_chat, vector_admin
+    receptionist, exam, quotation, documents, urls, simple_chat, vector_admin, auth_google
 )
 from app.db.mongo import client, verify_mongodb_connection
 from app.core.config import settings
@@ -38,6 +38,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from starlette.middleware.sessions import SessionMiddleware
+app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
+
 
 # ✅ Startup/shutdown
 @app.on_event("startup")
@@ -90,3 +94,4 @@ app.include_router(urls.router)
 app.include_router(simple_chat.router,  prefix="/chat")
 
 app.include_router(vector_admin.router)
+app.include_router(auth_google.router)
