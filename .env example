@@ -24,3 +24,7 @@ KOMMO_CLIENT_ID=your-client-id
 KOMMO_CLIENT_SECRET=your-secret
 KOMMO_SUBDOMAIN=your-subdomain
 KOMMO_REDIRECT_URI=http://localhost:8000/kommo/auth/callback
+
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
