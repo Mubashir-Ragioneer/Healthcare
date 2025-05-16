@@ -7,8 +7,15 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.core.config import settings
 import jwt
 from datetime import datetime, timedelta
+from bson import ObjectId
+from bson.errors import InvalidId
+from app.db.mongo import users_collection
+from app.utils.responses import format_response
 from app.db.mongo import get_db
 from typing import Literal
+from app.routers.deps import get_current_user
+
+
 
 
 router = APIRouter(tags=["auth"])
@@ -92,3 +99,20 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         import traceback
         print("🔥 Stack trace:", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/me", summary="Get current user info")
+async def whoami(current_user: dict = Depends(get_current_user)):
+    sub = current_user.get("user_id")
+
+    try:
+        # Case 1: sub is a valid ObjectId (email/password login)
+        user = await users_collection.find_one({"_id": ObjectId(sub)})
+    except (InvalidId, TypeError):
+        # Case 2: sub is likely an email (Google OAuth login)
+        user = await users_collection.find_one({"email": sub})
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user["_id"] = str(user["_id"])
+    return format_response(success=True, data={"user": user})
