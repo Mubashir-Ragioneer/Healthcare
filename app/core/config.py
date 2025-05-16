@@ -27,9 +27,6 @@ class Settings(BaseSettings):
     # Firecrawl settings
     FIRECRAWL_API_KEY: str = Field(..., env="FIRECRAWL_API_KEY")
 
-    # Frontend
-    FRONTEND_URL: AnyHttpUrl = Field(default="http://localhost:3000", env="FRONTEND_URL")
-
     # LLM settings
     SYSTEM_PROMPT: str = Field(
         default="You are a highly knowledgeable and empathetic AI healthcare assistant designed to support users with general medical inquiries...",
@@ -49,13 +46,6 @@ class Settings(BaseSettings):
     KOMMO_CLIENT_SECRET: str = Field(..., env="KOMMO_CLIENT_SECRET")
     KOMMO_SUBDOMAIN: str = Field(..., env="KOMMO_SUBDOMAIN")  # e.g. yourteam
     KOMMO_REDIRECT_URI: str = Field(default="http://localhost:8000/kommo/auth/callback", env="KOMMO_REDIRECT_URI")
-
-    # Auth0 settings
-    AUTH0_DOMAIN: str = Field(..., env="AUTH0_DOMAIN")
-    AUTH0_CLIENT_ID: str = Field(..., env="AUTH0_CLIENT_ID")
-    AUTH0_CLIENT_SECRET: str = Field(..., env="AUTH0_CLIENT_SECRET")
-    AUTH0_CALLBACK_URL: str = Field(default="http://localhost:8000/callback/auth", env="AUTH0_CALLBACK_URL")
-    AUTH0_AUDIENCE: str = Field(default="", env="AUTH0_AUDIENCE")
 
 
 settings = Settings()
