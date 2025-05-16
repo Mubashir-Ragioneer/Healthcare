@@ -20,7 +20,7 @@ from app.routers.deps import get_current_user
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(tags=["admin"])
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
