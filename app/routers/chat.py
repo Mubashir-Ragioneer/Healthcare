@@ -7,9 +7,14 @@ from fastapi.responses import JSONResponse
 from uuid import uuid4
 from datetime import datetime
 from app.services.kommo import push_lead_to_kommo
+from fastapi import Depends
+from app.routers.deps import get_current_user
 from app.services.chat_engine import chat_with_assistant, conversations
 from fastapi import Form, UploadFile, File
 from app.db.mongo import db
+from bson import ObjectId
+from app.db.mongo import conversation_collection
+from app.utils.responses import format_response
 from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
 
 
@@ -159,3 +164,31 @@ async def submit_clinical_trial(
     except Exception as e:
         print("❌ Error in /clinical-trial:", str(e))
         raise HTTPException(status_code=500, detail="Submission failed")
+
+
+@router.get("/conversations/{user_id}", summary="Get all conversations by user_id (email)")
+async def get_user_conversations_by_id(user_id: str):
+    try:
+        convos = await conversations.find(
+            {"user_id": user_id},
+            {"_id": 1, "conversation_id": 1, "chat_title": 1, "created_at": 1}
+        ).sort("created_at", -1).to_list(length=50)
+
+        results = []
+        for conv in convos:
+            results.append({
+                "conversation_id": conv.get("conversation_id"),
+                "chat_title": conv.get("chat_title", "New Conversation"),
+                "created_at": conv.get("created_at").isoformat() if conv.get("created_at") else None
+            })
+
+        return {
+            "success": True,
+            "data": {"conversations": results},
+            "message": ""
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Error fetching conversations")
