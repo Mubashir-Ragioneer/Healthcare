@@ -16,7 +16,7 @@ from bson import ObjectId
 from app.db.mongo import conversation_collection
 from app.utils.responses import format_response
 from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
-
+from app.services.find_specialist_engine import find_specialist_response
 
 
 UPLOAD_DIR = os.path.abspath("app/uploads")
@@ -192,3 +192,9 @@ async def get_user_conversations_by_id(user_id: str):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error fetching conversations")
+
+
+@router.post("/find-specialist", summary="Suggest a specialist based on user query")
+async def suggest_specialist(query: str = Body(...)):
+    answer = find_specialist_response(query)
+    return {"reply": answer}
