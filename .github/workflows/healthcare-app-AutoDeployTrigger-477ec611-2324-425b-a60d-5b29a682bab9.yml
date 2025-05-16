@@ -1,0 +1,45 @@
+name: Trigger auto deployment for healthcare-app
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/healthcare-app-AutoDeployTrigger-477ec611-2324-425b-a60d-5b29a682bab9.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:
+      
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.HEALTHCAREAPP_AZURE_CREDENTIALS }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: .               # directory that contains the Dockerfile
+          dockerfilePath: ./Dockerfile   # actual Dockerfile to build
+          registryUrl: healthcareapp.azurecr.io
+          registryUsername: ${{ secrets.HEALTHCAREAPP_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.HEALTHCAREAPP_REGISTRY_PASSWORD }}
+          containerAppName: healthcare-app
+          resourceGroup: dev-stage
+          imageToBuild: healthcareapp.azurecr.io/healthcare-app:${{ github.sha }}
+  
+          
+            
+
+     
+
