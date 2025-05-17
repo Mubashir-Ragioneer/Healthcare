@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     KOMMO_CLIENT_SECRET: str = Field(..., env="KOMMO_CLIENT_SECRET")
     KOMMO_SUBDOMAIN: str = Field(..., env="KOMMO_SUBDOMAIN")  # e.g. yourteam
     KOMMO_REDIRECT_URI: str = Field(default="http://localhost:8000/kommo/auth/callback", env="KOMMO_REDIRECT_URI")
+    
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_CLIENT_SECRET: str
+    GOOGLE_REDIRECT_URI: str
 
 
 settings = Settings()
