@@ -33,7 +33,9 @@ app = FastAPI(
 # ✅ CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://healthcare-app.wittycliff-1e4668a8.eastus.azurecontainerapps.io"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
