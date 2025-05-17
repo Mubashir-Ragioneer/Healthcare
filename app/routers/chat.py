@@ -52,7 +52,7 @@ class NewChatResponse(BaseModel):
 # ---------------------
 # Chat Routes
 # ---------------------
-@router.post("/", response_model=ChatResponse, summary="Send a message and receive a reply")
+@router.post("", response_model=ChatResponse, summary="Send a message and receive a reply")
 async def chat_endpoint(request: ChatRequest):
     try:
         msgs = [msg.dict() for msg in request.messages]
