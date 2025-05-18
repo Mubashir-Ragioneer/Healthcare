@@ -26,8 +26,8 @@ oauth.register(
 
 @router.get("/login/google")
 async def login_with_google(request: Request):
-    # Build redirect URI to match the one registered in Google Cloud Console
-    redirect_uri = request.url_for("auth_callback")
+    # directly use the exact HTTPS URI you registered in Google
+    redirect_uri = settings.GOOGLE_REDIRECT_URI  
     logging.info(f"Redirecting to Google OAuth with redirect_uri: {redirect_uri}")
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
