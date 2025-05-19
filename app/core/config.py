@@ -51,5 +51,6 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str
     GOOGLE_REDIRECT_URI: str
 
+    FRONTEND_URL: str
 
 settings = Settings()

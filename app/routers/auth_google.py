@@ -34,38 +34,47 @@ async def login_with_google(request: Request):
 @router.get("/callback/auth", name="auth_callback")
 async def auth_callback(request: Request):
     try:
-        # Verify OAuth flow and retrieve user info
+        # 1) Complete the OAuth flow
         token = await oauth.google.authorize_access_token(request)
         user_info = token.get("userinfo")
         if not user_info:
             raise HTTPException(status_code=400, detail="Failed to retrieve user info")
 
-        email = user_info["email"]
-        name = user_info.get("name")
+        email   = user_info["email"]
+        name    = user_info.get("name")
         picture = user_info.get("picture")
 
-        # Store or update user in MongoDB
+        # 2) Upsert your user
         user_collection = db["users"]
-        existing_user = await user_collection.find_one({"email": email})
-        if not existing_user:
-            await user_collection.insert_one({
-                "email": email,
-                "name": name,
+        await user_collection.update_one(
+            {"email": email},
+            {"$setOnInsert": {
+                "email":   email,
+                "name":    name,
                 "picture": picture,
-                "provider": "google"
-            })
+                "provider":"google"
+            }},
+            upsert=True
+        )
 
-        # Issue JWT token for the user
+        # 3) Issue your JWT
         jwt_token = create_jwt_token({"sub": email})
-        return {
-            "access_token": jwt_token,
-            "token_type": "bearer",
-            "user": {
-                "email": email,
-                "name": name,
-                "picture": picture
-            }
-        }
+
+        # ─── OPTION A: Set as HttpOnly cookie ────────────────────────
+        response = RedirectResponse(url=f"{settings.FRONTEND_URL}/ask-me-anything")
+        response.set_cookie(
+            key="access_token",
+            value=jwt_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 7,  # 1 week
+        )
+        return response
+
+        # ─── OPTION B: Pass in query string ─────────────────────────
+        # redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={jwt_token}"
+        # return RedirectResponse(url=redirect_url)
 
     except OAuthError as e:
         logging.error(f"OAuth error: {e}")
