@@ -4,7 +4,7 @@ from fastapi import APIRouter, Request
 router = APIRouter(prefix="/kommo", tags=["kommo"])
 
 @router.post("/webhook")
-async def kommo_webhook(request: Request):
+async def kommo_webhook(request: Request, current_user: dict = Depends(get_current_user)):
     payload = await request.json()
     message_text = payload.get("message", {}).get("text")
     lead_id = payload.get("lead", {}).get("id")

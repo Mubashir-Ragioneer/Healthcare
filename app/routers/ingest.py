@@ -4,7 +4,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from bson import ObjectId
 import io
-
+from app.routers.deps import require_admin
 from app.services.file_ingestor import process_file
 from app.db.mongo import documents_collection
 from app.routers.deps import get_current_user
@@ -19,7 +19,7 @@ router = APIRouter(tags=["ingest"])
 @router.post("/upload", summary="Upload one or more files (admin only)")
 async def upload_files(
     files: list[UploadFile] = File(...),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_admin)
 ):
     """
     Admin uploads files to be ingested and stored.
@@ -40,7 +40,7 @@ async def upload_files(
 @router.get("/file/{document_id}", summary="Download a previously uploaded file")
 async def download_file(
     document_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_admin)
 ):
     """
     Admin can download a specific uploaded file by document ID.
