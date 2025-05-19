@@ -60,21 +60,21 @@ async def auth_callback(request: Request):
         # 3) Issue your JWT
         jwt_token = create_jwt_token({"sub": email})
 
-        # # ─── OPTION A: Set as HttpOnly cookie ────────────────────────
-        # response = RedirectResponse(url=f"{settings.FRONTEND_URL}/ask-me-anything")
-        # response.set_cookie(
-        #     key="access_token",
-        #     value=jwt_token,
-        #     httponly=True,
-        #     secure=True,
-        #     samesite="lax",
-        #     max_age=60 * 60 * 24 * 7,  # 1 week
-        # )
-        # return response
+        # ─── OPTION A: Set as HttpOnly cookie ────────────────────────
+        response = RedirectResponse(url=f"{settings.FRONTEND_URL}/ask-me-anything")
+        response.set_cookie(
+            key="access_token",
+            value=jwt_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 7,  # 1 week
+        )
+        return response
 
         # ─── OPTION B: Pass in query string ─────────────────────────
-        redirect_url = f"{settings.FRONTEND_URL}/ask-me-anything?token={jwt_token}"
-        return RedirectResponse(url=redirect_url)
+        # redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={jwt_token}"
+        # return RedirectResponse(url=redirect_url)
 
     except OAuthError as e:
         logging.error(f"OAuth error: {e}")
