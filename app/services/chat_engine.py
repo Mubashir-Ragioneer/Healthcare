@@ -55,7 +55,7 @@ async def chat_with_assistant(
     # 🧠 System prompt with context
     context_block = "\n--\n".join(context_chunks[:3])
     #print("retrieval:", context_block)
-    loggin.info("retrieval:", context_block)
+    logging.info("retrieval:", context_block)
     system_prompt = {
         "role": "system",
         "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"
