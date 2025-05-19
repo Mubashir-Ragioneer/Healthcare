@@ -2,7 +2,7 @@
 import os
 from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Body
 from pydantic import BaseModel, Field
-from typing import Literal, List, Optional
+from typing import Literal, List, Optional, Dict, Any
 from fastapi.responses import JSONResponse
 from uuid import uuid4
 from datetime import datetime
@@ -18,6 +18,9 @@ from app.utils.responses import format_response
 from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
 from app.services.find_specialist_engine import find_specialist_response
 import logging
+from app.schemas.specialist import FindSpecialistRequest, SpecialistSuggestion
+import asyncio  # for async to_thread
+
 
 UPLOAD_DIR = os.path.abspath("app/uploads")
 
@@ -195,10 +198,21 @@ async def get_user_conversations_by_id(user_id: str, current_user: dict = Depend
         raise HTTPException(status_code=500, detail="Error fetching conversations")
 
 
-@router.post("/find-specialist", summary="Suggest a specialist based on user query")
-async def suggest_specialist(query: str = Body(...), current_user: dict = Depends(get_current_user)):
-    answer = find_specialist_response(query)
-    return {"reply": answer}
+@router.post(
+    "/find-specialist",
+    response_model=SpecialistSuggestion,
+    summary="Suggest a specialist based on user query"
+)
+async def suggest_specialist(
+    payload: FindSpecialistRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        # Use to_thread to call your sync function in async route
+        raw = await asyncio.to_thread(find_specialist_response, payload.query)
+        return SpecialistSuggestion(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/delete/{conversation_id}", summary="Delete a conversation by ID")
 async def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
