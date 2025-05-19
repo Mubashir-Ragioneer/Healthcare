@@ -31,6 +31,7 @@ async def login_with_google(request: Request):
     logging.info(f"Redirecting to Google OAuth with redirect_uri: {redirect_uri}")
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
+
 @router.get("/callback/auth", name="auth_callback")
 async def auth_callback(request: Request):
     try:
@@ -48,38 +49,25 @@ async def auth_callback(request: Request):
         user_collection = db["users"]
         await user_collection.update_one(
             {"email": email},
-            {"$setOnInsert": {
-                "email":   email,
-                "name":    name,
-                "picture": picture,
-                "provider":"google"
-            }},
+            {
+                "$setOnInsert": {
+                    "email":    email,
+                    "name":     name,
+                    "picture":  picture,
+                    "provider": "google"
+                }
+            },
             upsert=True
         )
 
         # 3) Issue your JWT
         jwt_token = create_jwt_token({"sub": email})
 
-        # ─── OPTION A: Set as HttpOnly cookie ────────────────────────
-        response = RedirectResponse(url=f"{settings.FRONTEND_URL}/ask-me-anything")
-        response.set_cookie(
-            key="access_token",
-            value=jwt_token,
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            max_age=60 * 60 * 24 * 7,  # 1 week
+        # Redirect to frontend with token in URL parameters
+        return RedirectResponse(
+            url=f"{settings.FRONTEND_URL}/login?token={jwt_token}",
+            status_code=302
         )
-        return response
-
-        # ─── OPTION B: Pass in query string ─────────────────────────
-        # redirect_url = f"{settings.FRONTEND_URL}/dashboard?token={jwt_token}"
-        # return RedirectResponse(url=redirect_url)
-
-    except OAuthError as e:
-        logging.error(f"OAuth error: {e}")
-        raise HTTPException(status_code=400, detail=f"OAuth Error: {e}")
 
     except Exception as e:
-        logging.error(f"Unexpected error during callback: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+        raise HTTPException(status_code=500, detail=str(e))
