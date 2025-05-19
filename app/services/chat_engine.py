@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 import json
 import os
-
+import logging
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = mongo_client[settings.MONGODB_DB]
