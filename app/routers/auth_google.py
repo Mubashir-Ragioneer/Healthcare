@@ -73,7 +73,7 @@ async def auth_callback(request: Request):
         # return response
 
         # ─── OPTION B: Pass in query string ─────────────────────────
-        redirect_url = f"{settings.FRONTEND_URL}/ask?token={jwt_token}"
+        redirect_url = f"{settings.FRONTEND_URL}/ask-me-anything?token={jwt_token}"
         return RedirectResponse(url=redirect_url)
 
     except OAuthError as e:
