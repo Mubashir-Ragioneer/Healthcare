@@ -3,7 +3,9 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from datetime import datetime
 from typing import Optional, List
+from app.routers.deps import require_admin, get_current_user
 from app.db.mongo import exam_requests_collection
+from fastapi import Depends
 from app.services.kommo import push_exam_lead_to_kommo  
 
 router = APIRouter(tags=["exam"])
@@ -16,7 +18,7 @@ class ExamScheduleRequest(BaseModel):
     purpose: Optional[str] = None
 
 @router.post("/schedule", status_code=201, summary="Schedule a medical exam")
-async def schedule_exam(req: ExamScheduleRequest):
+async def schedule_exam(req: ExamScheduleRequest, current_user: dict = Depends(get_current_user)):
     doc = req.dict()
     doc["created_at"] = datetime.utcnow()
     await exam_requests_collection.insert_one(doc)
@@ -29,6 +31,6 @@ async def schedule_exam(req: ExamScheduleRequest):
     return {"message": "✅ Exam scheduled successfully."}
 
 @router.get("/schedule", response_model=List[ExamScheduleRequest])
-async def list_exam_requests(user_id: str):
+async def list_exam_requests(user_id: str, current_user: dict = Depends(get_current_user)):
     docs = await exam_requests_collection.find({"user_id": user_id}).to_list(100)
     return docs

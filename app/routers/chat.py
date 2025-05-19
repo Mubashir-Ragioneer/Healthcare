@@ -17,7 +17,7 @@ from app.db.mongo import conversation_collection
 from app.utils.responses import format_response
 from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
 from app.services.find_specialist_engine import find_specialist_response
-
+import logging
 
 UPLOAD_DIR = os.path.abspath("app/uploads")
 
@@ -53,7 +53,7 @@ class NewChatResponse(BaseModel):
 # Chat Routes
 # ---------------------
 @router.post("", response_model=ChatResponse, summary="Send a message and receive a reply")
-async def chat_endpoint(request: ChatRequest):
+async def chat_endpoint(request: ChatRequest, current_user: dict = Depends(get_current_user)):
     try:
         msgs = [msg.dict() for msg in request.messages]
 
@@ -74,7 +74,7 @@ async def chat_endpoint(request: ChatRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/new", response_model=NewChatResponse, summary="Start a new chat thread")
-async def start_new_chat(req: NewChatRequest):
+async def start_new_chat(req: NewChatRequest, current_user: dict = Depends(get_current_user)):
     new_id = str(uuid4())
     convo = {
         "user_id": req.user_id,
@@ -88,7 +88,7 @@ async def start_new_chat(req: NewChatRequest):
     return {"conversation_id": new_id, "chat_title": "New Conversation"}
 
 @router.get("/history/{conversation_id}", summary="Get full conversation by ID")
-async def get_chat_history(conversation_id: str):
+async def get_chat_history(conversation_id: str, current_user: dict = Depends(get_current_user)):
     try:
         convo = await conversations.find_one({"conversation_id": conversation_id})
         if not convo:
@@ -122,6 +122,7 @@ async def submit_clinical_trial(
         default=None,
         description="Optional: upload test result file (PDF, image, etc.)"
     ),
+    current_user: dict = Depends(get_current_user)
 ):
     try:
         # Ensure upload directory exists
@@ -167,7 +168,7 @@ async def submit_clinical_trial(
 
 
 @router.get("/conversations/{user_id}", summary="Get all conversations by user_id (email)")
-async def get_user_conversations_by_id(user_id: str):
+async def get_user_conversations_by_id(user_id: str, current_user: dict = Depends(get_current_user)):
     try:
         convos = await conversations.find(
             {"user_id": user_id},
@@ -195,6 +196,13 @@ async def get_user_conversations_by_id(user_id: str):
 
 
 @router.post("/find-specialist", summary="Suggest a specialist based on user query")
-async def suggest_specialist(query: str = Body(...)):
+async def suggest_specialist(query: str = Body(...), current_user: dict = Depends(get_current_user)):
     answer = find_specialist_response(query)
     return {"reply": answer}
+
+@router.delete("/delete/{conversation_id}", summary="Delete a conversation by ID")
+async def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
+    result = await conversations.delete_one({"conversation_id": conversation_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"success": True, "message": "🗑️ Conversation deleted successfully"}

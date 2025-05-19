@@ -54,7 +54,8 @@ async def chat_with_assistant(
 
     # 🧠 System prompt with context
     context_block = "\n--\n".join(context_chunks[:3])
-    print("retrieval:", context_block)
+    #print("retrieval:", context_block)
+    loggin.info("retrieval:", context_block)
     system_prompt = {
         "role": "system",
         "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"
@@ -84,6 +85,7 @@ async def chat_with_assistant(
     # 📦 Parse structured JSON reply
     reply_raw = response.choices[0].message.content
     print("🪵 Raw LLM response:", repr(reply_raw))
+    logging.info("🪵 Raw LLM response:", repr(reply_raw))
 
     try:
         parsed = json.loads(reply_raw)
@@ -108,8 +110,13 @@ async def chat_with_assistant(
             await conversations.update_one(
                 {"conversation_id": conversation_id},
                 {
-                    "$set": {"last_updated": datetime.utcnow()},
-                    "$push": {"messages": {"$each": timestamped_msgs + [reply_msg]}}
+                    "$set": {
+                        "last_updated": datetime.utcnow(),
+                        "chat_title": chat_title  # ✅ Fix: persist the updated chat_title
+                    },
+                    "$push": {
+                        "messages": {"$each": timestamped_msgs + [reply_msg]}
+                    }
                 }
             )
         else:
@@ -122,7 +129,7 @@ async def chat_with_assistant(
                 "messages": timestamped_msgs + [reply_msg]
             }
             await conversations.insert_one(new_convo)
-
+            
     asyncio.create_task(log_to_db())
 
     return {

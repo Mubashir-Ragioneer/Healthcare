@@ -75,7 +75,7 @@ async def book_appointment(a: AppointmentCreate):
     "/",
     summary="List all available doctors from MongoDB (safe)",
 )
-async def list_doctors():
+async def list_doctors(current_user: dict = Depends(get_current_user)):
     docs = await doctors_collection.find().to_list(length=100)
 
     for doc in docs:
@@ -89,6 +89,6 @@ async def list_doctors():
     summary="List all booked appointments for a specific user",
     response_model=List[AppointmentInDB],
 )
-async def get_appointments_for_user(user_id: str):
+async def get_appointments_for_user(user_id: str, current_user: dict = Depends(get_current_user)):
     docs = await appointments_collection.find({"user_id": user_id}).to_list(length=100)
     return docs
