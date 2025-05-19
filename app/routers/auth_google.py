@@ -33,6 +33,7 @@ async def login_with_google(request: Request):
 
 @router.get("/callback/auth", name="auth_callback")
 async def auth_callback(request: Request):
+    logging.info(f"{request}")
     try:
         # Verify OAuth flow and retrieve user info
         token = await oauth.google.authorize_access_token(request)
