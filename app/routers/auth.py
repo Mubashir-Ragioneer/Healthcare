@@ -119,9 +119,14 @@ async def whoami(current_user: dict = Depends(get_current_user)):
     return format_response(success=True, data={"user": user})
 
 
-
 @router.post("/logout", summary="Logout and clear auth cookie")
 async def logout():
     response = JSONResponse(content={"message": "Successfully logged out"})
-    response.delete_cookie(key="access_token")  # adjust if you're using another name
+    response.delete_cookie(
+        key="access_token",
+        path="/",  # match how it was set
+        domain=None,  # set if you used a specific domain
+        httponly=True,  # important if your token is httpOnly
+    )
     return response
+
