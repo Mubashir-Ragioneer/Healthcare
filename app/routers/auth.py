@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from bson.errors import InvalidId
 from app.db.mongo import users_collection
+from fastapi.responses import JSONResponse
 from app.utils.responses import format_response
 from app.db.mongo import get_db
 from typing import Literal
@@ -116,3 +117,11 @@ async def whoami(current_user: dict = Depends(get_current_user)):
 
     user["_id"] = str(user["_id"])
     return format_response(success=True, data={"user": user})
+
+
+
+@router.post("/logout", summary="Logout and clear auth cookie")
+async def logout():
+    response = JSONResponse(content={"message": "Successfully logged out"})
+    response.delete_cookie(key="access_token")  # adjust if you're using another name
+    return response
