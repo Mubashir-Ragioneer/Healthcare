@@ -15,7 +15,7 @@ from app.utils.responses import format_response
 from app.db.mongo import get_db
 from typing import Literal
 from app.routers.deps import get_current_user
-
+from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFoundError, ConflictError
 
 
 
@@ -57,7 +57,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 async def signup(user: UserSignup):
     existing = await users_collection.find_one({"email": user.email})
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise ConflictError("Email already registered")
 
     hashed_password = pwd_context.hash(user.password)
     await users_collection.insert_one({
@@ -78,13 +78,18 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
 
     if not existing_user:
         print("❌ User not found")
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise UnauthorizedRequestError("Invalid credentials")
+
+    # Google-only account: no password available for normal login
+    if existing_user.get("provider") == "google" and "password" not in existing_user:
+        print("❌ Account registered via Google; password login not available.")
+        raise UnauthorizedRequestError("This account was registered via Google. Please use Google login.")
 
     try:
         print("🔑 Verifying password...")
-        if not verify_password(user.password, existing_user["password"]):
+        if not verify_password(user.password, existing_user.get("password", "")):
             print("❌ Password verification failed")
-            raise HTTPException(status_code=401, detail="Invalid credentials")
+            raise UnauthorizedRequestError("Invalid credentials")
 
         print("✅ Creating access token...")
         access_token = create_access_token(data={
@@ -99,8 +104,8 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         print("🔥 Login error:", str(e))
         import traceback
         print("🔥 Stack trace:", traceback.format_exc())
-        raise HTTPException(status_code=500, detail="Internal Server Error")
-
+        raise InternalServerError("Internal Server Error")
+        
 @router.get("/me", summary="Get current user info")
 async def whoami(current_user: dict = Depends(get_current_user)):
     sub = current_user.get("user_id")
