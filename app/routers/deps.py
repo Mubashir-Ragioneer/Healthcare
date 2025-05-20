@@ -12,15 +12,17 @@ def get_current_user(token: HTTPAuthorizationCredentials = Security(bearer_schem
     try:
         payload = jwt.decode(token.credentials, settings.SECRET_KEY, algorithms=["HS256"])
         user_id: str = payload.get("sub")
+        email: str = payload.get("email")
         role: str = payload.get("role", "user")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return {"user_id": user_id, "role": role}
+        return {"user_id": user_id, "email": email, "role": role}
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Could not validate credentials"
         )
+
 
 
 def require_admin(current_user: dict = Depends(get_current_user)):

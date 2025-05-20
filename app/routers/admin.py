@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, validator
 from typing import List, Dict
 from motor.motor_asyncio import AsyncIOMotorClient
-
+from bson import ObjectId
 from app.core.config import settings
 from app.models.appointment import AppointmentInDB
 from app.db.mongo import appointments_collection
@@ -16,6 +16,7 @@ from app.utils.responses import format_response  # ✅ uniform response wrapper
 from app.models.user import UserCreate
 from passlib.context import CryptContext
 from app.routers.deps import get_current_user
+from app.utils.errors import NotFoundError, BadRequestError, ForbiddenError, InternalServerError
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -148,6 +149,30 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
     })
     return {"message": f"✅ Admin user '{user.email}' created successfully"}
 
+@router.get("/all-users", summary="Get all users (admins and regular users)")
+async def get_all_users(current_user: dict = Depends(require_admin)):
+    """
+    Fetch all users (admins and non-admins).
+    """
+    try:
+        cursor = users_collection.find({})
+        users = []
+        async for user in cursor:
+            user["_id"] = str(user["_id"])
+            user.pop("password", None)  # Never expose password hashes
+            users.append({
+                "id": user["_id"],
+                "email": user.get("email"),
+                "name": user.get("name"),
+                "role": user.get("role", "user"),
+                "diagnosis": user.get("diagnosis"),
+                "created_at": user.get("created_at"),
+                # Add more fields as needed
+            })
+        return {"success": True, "users": users}
+    except Exception as e:
+        raise InternalServerError(f"Failed to fetch users: {e}")
+        
 @router.get("/Get-All-Admins", summary="List all admin users")
 async def list_admin_users(current_user: dict = Depends(require_admin)):
     """
@@ -165,6 +190,40 @@ async def list_admin_users(current_user: dict = Depends(require_admin)):
         })
     return format_response(success=True, data={"admins": admins})
 
+
+@router.delete("/remove-admin-by-email/{email}", summary="Demote an admin to user by email")
+async def remove_admin_by_email(
+    email: str,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Demote an admin to a regular user, by email.
+    Restricts an admin from demoting themselves.
+    """
+    # Debug: print who is logged in
+    print(f"Current admin performing action: {current_user}")
+
+    # Case-insensitive comparison, strip spaces
+    if email.strip().lower() == str(current_user.get("email", "")).strip().lower():
+        print("🛑 Attempted self-demotion blocked.")
+        raise ForbiddenError("You cannot demote yourself.")
+
+    user = await users_collection.find_one({"email": email})
+    if not user:
+        raise NotFoundError("User not found.")
+
+    if user.get("role") != "admin":
+        raise BadRequestError("User is not an admin.")
+
+    await users_collection.update_one(
+        {"email": email},
+        {"$set": {"role": "user"}}
+    )
+
+    return {
+        "success": True,
+        "message": f"User '{email}' is no longer an admin."
+    }
 
 @router.get("/me")
 async def whoami(current_user: dict = Depends(get_current_user)):
