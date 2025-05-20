@@ -128,6 +128,7 @@ async def sync_report(current_user: dict = Depends(require_admin)):
         "feegow_unsynced": total - feegow_ok
     }
     return format_response(success=True, data={"sync_report": report})
+
 @router.post("/create-admin", summary="Create or promote an admin user")
 async def create_admin(user: UserCreate, current_user: dict = Depends(require_admin)):
     existing = await users_collection.find_one({"email": user.email})
@@ -146,6 +147,24 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
         "role": "admin"
     })
     return {"message": f"✅ Admin user '{user.email}' created successfully"}
+
+@router.get("/Get-All-Admins", summary="List all admin users")
+async def list_admin_users(current_user: dict = Depends(require_admin)):
+    """
+    Return a list of all admin users in the database.
+    """
+    admins_cursor = users_collection.find({"role": "admin"})
+    admins = []
+    async for user in admins_cursor:
+        user["_id"] = str(user["_id"])
+        admins.append({
+            "id": user["_id"],
+            "email": user.get("email"),
+            "name": user.get("name"),
+            "role": user.get("role"),
+        })
+    return format_response(success=True, data={"admins": admins})
+
 
 @router.get("/me")
 async def whoami(current_user: dict = Depends(get_current_user)):
