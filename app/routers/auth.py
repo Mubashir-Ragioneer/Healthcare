@@ -60,7 +60,7 @@ async def signup(user: UserSignup):
         raise ConflictError("Email already registered")
 
     hashed_password = pwd_context.hash(user.password)
-    await users_collection.insert_one({
+    result = await users_collection.insert_one({
         "full_name": user.full_name,
         "email": user.email,
         "phone_number": user.phone_number,
@@ -68,7 +68,24 @@ async def signup(user: UserSignup):
         "password": hashed_password,
         "created_at": datetime.utcnow()
     })
-    return {"message": "User registered successfully"}
+    # Generate JWT access token for the new user
+    access_token = create_access_token({
+        "sub": str(result.inserted_id),
+        "email": user.email,
+        "role": "user"
+    })
+    # After access_token creation
+    user_doc = await users_collection.find_one({"_id": result.inserted_id})
+    user_doc["_id"] = str(user_doc["_id"])
+    user_doc.pop("password", None)  # Never send password hash!
+
+    return {
+        "message": "User registered successfully",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": user_doc
+    }
+
 
 @router.post("/login", response_model=Token)
 async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
