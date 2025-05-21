@@ -9,7 +9,7 @@ from bson import ObjectId
 from app.db.mongo import db
 from app.db.pinecone import index
 from app.services.file_ingestor import process_url
-from app.routers.deps import get_current_user
+from app.routers.deps import get_current_user, require_admin
 from app.utils.responses import format_response
 
 router = APIRouter(prefix="/url", tags=["urls"])
@@ -47,10 +47,10 @@ def clean_doc(doc):
 @router.post("/", summary="Ingest a public URL")
 async def ingest_url(
     url: str = Form(...),
-    current_user: dict = Depends(get_current_user)
+    email: str = Form(...),  # <- Accept email just like file upload
+    current_user: dict = Depends(require_admin)
 ):
-    user_id = current_user["user_id"]
-    result = await process_url(url, user_id=user_id)
+    result = await process_url(url, user_id=email)  # Use email as user_id
 
     return format_response(
         success=True,
@@ -64,9 +64,8 @@ async def ingest_url(
     )
     
 @router.get("/logs", summary="List all ingested URL documents")
-async def list_full_url_docs(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["user_id"]
-    docs = await urls_collection.find({"user_id": user_id}).to_list(100)
+async def list_full_url_docs(current_user: dict = Depends(require_admin)):
+    docs = await urls_collection.find({}).to_list(100)  # No filter — fetches all URL docs
 
     return format_response(
         success=True,
@@ -77,11 +76,11 @@ async def list_full_url_docs(current_user: dict = Depends(get_current_user)):
 @router.delete("/{document_id}", summary="Delete a URL and its Pinecone chunks")
 async def delete_url(
     document_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_admin)  # Require admin for this route
 ):
     doc = await urls_collection.find_one({"_id": ObjectId(document_id)})
-    if not doc or doc.get("user_id") != current_user["user_id"]:
-        raise HTTPException(status_code=404, detail="URL document not found or access denied")
+    if not doc:
+        raise HTTPException(status_code=404, detail="URL document not found")
 
     await urls_collection.delete_one({"_id": ObjectId(document_id)})
 

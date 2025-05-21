@@ -11,6 +11,8 @@ import asyncio
 import json
 import os
 import logging
+from fastapi import UploadFile
+
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = mongo_client[settings.MONGODB_DB]
@@ -130,6 +132,136 @@ async def chat_with_assistant(
             }
             await conversations.insert_one(new_convo)
             
+    asyncio.create_task(log_to_db())
+
+    return {
+        "reply": reply,
+        "chat_title": chat_title,
+        "conversation_id": conversation_id or "new"
+    }
+
+
+async def chat_with_assistant_file(
+    messages: List[Dict[str, Any]],
+    user_id: str,
+    conversation_id: Optional[str] = None,
+    file: UploadFile = None
+) -> Dict[str, str]:
+    # Get the user's latest question (assume it's last in messages)
+    query = messages[-1]["content"]
+
+    # 1. Retrieve semantic context
+    matches = await search_similar_chunks(query)
+    context_chunks = [match["metadata"]["chunk_text"] for match in matches]
+    cfg = await get_llm_config()
+
+    context_block = "\n--\n".join(context_chunks[:3])
+    logging.info("retrieval: %s", context_block)
+    system_prompt = {
+        "role": "system",
+        "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"
+    }
+
+    # 2. Get prior messages
+    prior_messages = []
+    if conversation_id:
+        convo = await conversations.find_one({"conversation_id": conversation_id})
+        if convo and "messages" in convo:
+            prior_messages = convo["messages"]
+
+    # 3. Prepare user message block (file + text)
+    content_block = []
+    # If a file is provided, upload and reference by file_id (OpenAI pattern)
+    if file:
+        try:
+            uploaded = client.files.create(
+                file=file.file,
+                purpose="user_data"
+            )
+            file_id = uploaded.id
+            content_block.append({
+                "type": "file",
+                "file": {"file_id": file_id}
+            })
+        except Exception as e:
+            logging.error("File upload to OpenAI failed: %s", str(e))
+            raise RuntimeError(f"File upload to OpenAI failed: {e}")
+
+    # Add the latest user text as a text block (OpenAI expects {"type": "text", "text": ...})
+    for msg in messages:
+        if msg["role"] == "user":
+            # If content is already a dict, keep as is (for API flexibility), else wrap as text type
+            if isinstance(msg["content"], dict) and "type" in msg["content"]:
+                content_block.append(msg["content"])
+            else:
+                content_block.append({"type": "text", "text": msg["content"]})
+
+    # 4. Build final_messages as in your previous function
+    final_messages = [system_prompt] + prior_messages + [
+        {
+            "role": "user",
+            "content": content_block
+        }
+    ]
+
+    # 5. Call OpenAI
+    try:
+        response = client.chat.completions.create(
+            model=cfg["model"],
+            messages=final_messages,
+            temperature=cfg["temperature"],
+            max_tokens=cfg["max_tokens"]
+        )
+    except Exception as e:
+        print("❌ OpenAI API error:", str(e))
+        raise RuntimeError("LLM call failed")
+
+    # 6. Parse response as before
+    reply_raw = response.choices[0].message.content
+    print("🪵 Raw LLM response:", repr(reply_raw))
+    logging.info("🪵 Raw LLM response: %s", repr(reply_raw))
+
+    try:
+        parsed = json.loads(reply_raw)
+        if not isinstance(parsed, dict):
+            raise TypeError("Expected a JSON object")
+        reply = parsed["reply"]
+        chat_title = parsed.get("chat_title", "New Conversation")
+    except Exception as e:
+        print("❌ Failed to parse JSON:", str(e))
+        raise RuntimeError("Invalid JSON from LLM")
+
+    # 7. Log messages to DB
+    timestamped_msgs = generate_timestamped_msgs(messages)
+    reply_msg = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+    async def log_to_db():
+        if conversation_id:
+            await conversations.update_one(
+                {"conversation_id": conversation_id},
+                {
+                    "$set": {
+                        "last_updated": datetime.utcnow(),
+                        "chat_title": chat_title
+                    },
+                    "$push": {
+                        "messages": {"$each": timestamped_msgs + [reply_msg]}
+                    }
+                }
+            )
+        else:
+            new_convo = {
+                "conversation_id": str(uuid4()),
+                "user_id": user_id,
+                "chat_title": chat_title,
+                "created_at": datetime.utcnow(),
+                "last_updated": datetime.utcnow(),
+                "messages": timestamped_msgs + [reply_msg]
+            }
+            await conversations.insert_one(new_convo)
     asyncio.create_task(log_to_db())
 
     return {

@@ -30,10 +30,9 @@ def doc_to_dict(doc):
 # Routes
 # -----------------------------
 
-@router.get("/", summary="List all documents for the authenticated user")
+@router.get("/", summary="List all documents")
 async def list_documents(current_user: dict = Depends(get_current_user)):
-    user_id = current_user["user_id"]
-    docs = await documents.find({"user_id": user_id}).to_list(length=100)
+    docs = await documents.find({}).to_list(length=100)  # No filter: returns all docs
     return format_response(success=True, data={"documents": [doc_to_dict(doc) for doc in docs]})
 
 @router.get("/{document_id}", summary="Get document metadata by ID")
