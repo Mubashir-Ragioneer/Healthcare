@@ -15,7 +15,7 @@ from app.utils.responses import format_response
 from app.db.mongo import get_db
 from typing import Literal
 from app.routers.deps import get_current_user
-from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFoundError, ConflictError
+from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFoundError, ConflictError, InternalServerError
 
 
 

@@ -49,3 +49,7 @@ class ServiceUnavailableError(HTTPException):
 class GatewayTimeoutError(HTTPException):
     def __init__(self, detail: str):
         super().__init__(status_code=504, detail=detail)
+
+class InternalServerError(HTTPException):
+    def __init__(self, detail="Internal Server Error"):
+        super().__init__(status_code=500, detail=detail)
