@@ -17,6 +17,9 @@ from app.models.user import UserCreate
 from passlib.context import CryptContext
 from app.routers.deps import get_current_user
 from app.utils.errors import NotFoundError, BadRequestError, ForbiddenError, InternalServerError
+from app.utils.pagination import build_pagination, build_sort
+from fastapi import Query
+
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -149,17 +152,36 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
     })
     return {"message": f"✅ Admin user '{user.email}' created successfully"}
 
+
 @router.get("/all-users", summary="Get all users (admins and regular users)")
-async def get_all_users(current_user: dict = Depends(require_admin)):
+async def get_all_users(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    current_user: dict = Depends(require_admin),
+):
     """
-    Fetch all users (admins and non-admins).
+    Fetch all users (admins and non-admins) with pagination, search, and sorting.
     """
     try:
-        cursor = users_collection.find({})
+        skip, limit = build_pagination(page, page_size)
+        sort = build_sort(sort_by, sort_order)
+
+        query = {}
+        if search:
+            query["$or"] = [
+                {"email": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": search, "$options": "i"}},
+            ]
+
+        total = await users_collection.count_documents(query)
+        cursor = users_collection.find(query).sort(sort).skip(skip).limit(limit)
         users = []
         async for user in cursor:
             user["_id"] = str(user["_id"])
-            user.pop("password", None)  # Never expose password hashes
+            user.pop("password", None)
             users.append({
                 "id": user["_id"],
                 "email": user.get("email"),
@@ -167,20 +189,40 @@ async def get_all_users(current_user: dict = Depends(require_admin)):
                 "role": user.get("role", "user"),
                 "diagnosis": user.get("diagnosis"),
                 "created_at": user.get("created_at"),
-                # Add more fields as needed
             })
-        return {"success": True, "users": users}
+        return {
+            "success": True,
+            "users": users,
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        }
     except Exception as e:
         raise InternalServerError(f"Failed to fetch users: {e}")
         
+
 @router.get("/Get-All-Admins", summary="List all admin users")
-async def list_admin_users(current_user: dict = Depends(require_admin)):
+async def list_admin_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str = Query(None, description="Search by email or name"),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
+    current_user: dict = Depends(require_admin)
+):
     """
-    Return a list of all admin users in the database.
+    Return a paginated, searchable, sortable list of all admin users in the database.
     """
-    admins_cursor = users_collection.find({"role": "admin"})
+    query = {"role": "admin"}
+    if search:
+        query["$or"] = [
+            {"email": {"$regex": search, "$options": "i"}},
+            {"name": {"$regex": search, "$options": "i"}},
+        ]
+    sort_direction = -1 if sort_order.lower() == "desc" else 1
+    cursor = users_collection.find(query).sort(sort_by, sort_direction).skip((page - 1) * page_size).limit(page_size)
     admins = []
-    async for user in admins_cursor:
+    async for user in cursor:
         user["_id"] = str(user["_id"])
         admins.append({
             "id": user["_id"],
@@ -188,7 +230,19 @@ async def list_admin_users(current_user: dict = Depends(require_admin)):
             "name": user.get("name"),
             "role": user.get("role"),
         })
-    return format_response(success=True, data={"admins": admins})
+    total = await users_collection.count_documents(query)
+    return format_response(
+        success=True,
+        data={
+            "admins": admins,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "total_pages": (total + page_size - 1) // page_size,
+            }
+        }
+    )
 
 
 @router.delete("/remove-admin-by-email/{email}", summary="Demote an admin to user by email")

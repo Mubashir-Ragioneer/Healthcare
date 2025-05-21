@@ -11,6 +11,7 @@ from app.db.pinecone import index
 from app.services.file_ingestor import process_url
 from app.routers.deps import get_current_user, require_admin
 from app.utils.responses import format_response
+from app.utils.pagination import build_pagination, build_sort
 
 router = APIRouter(prefix="/url", tags=["urls"])
 urls_collection = db["urls"]
@@ -64,12 +65,32 @@ async def ingest_url(
     )
     
 @router.get("/logs", summary="List all ingested URL documents")
-async def list_full_url_docs(current_user: dict = Depends(require_admin)):
-    docs = await urls_collection.find({}).to_list(100)  # No filter — fetches all URL docs
-
+async def list_full_url_docs(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    current_user: dict = Depends(require_admin)
+):
+    skip, limit = build_pagination(page, page_size)
+    sort = build_sort(sort_by, sort_order)
+    query = {}
+    if search:
+        query["$or"] = [
+            {"source": {"$regex": search, "$options": "i"}},
+            {"user_id": {"$regex": search, "$options": "i"}},
+        ]
+    total = await urls_collection.count_documents(query)
+    docs = await urls_collection.find(query).sort(sort).skip(skip).limit(limit).to_list(length=page_size)
     return format_response(
         success=True,
-        data={"documents": [clean_doc(doc) for doc in docs]},
+        data={
+            "documents": [clean_doc(doc) for doc in docs],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        },
         message="Fetched full URL logs"
     )
 
