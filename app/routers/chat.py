@@ -1,16 +1,14 @@
 # app/routers/chat.py
-import os
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Body
+import os, json
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Body, Depends
 from pydantic import BaseModel, Field
 from typing import Literal, List, Optional, Dict, Any
 from fastapi.responses import JSONResponse
 from uuid import uuid4
 from datetime import datetime
 from app.services.kommo import push_lead_to_kommo
-from fastapi import Depends
 from app.routers.deps import get_current_user
 from app.services.chat_engine import chat_with_assistant, conversations
-from fastapi import Form, UploadFile, File
 from app.db.mongo import db
 from bson import ObjectId
 from app.db.mongo import conversation_collection
@@ -20,6 +18,11 @@ from app.services.find_specialist_engine import find_specialist_response
 import logging
 from app.schemas.specialist import FindSpecialistRequest, SpecialistSuggestion
 import asyncio  # for async to_thread
+from openai import OpenAI
+from app.core.config import settings
+from app.services.chat_engine import chat_with_assistant_file
+
+
 
 
 UPLOAD_DIR = os.path.abspath("app/uploads")
@@ -75,6 +78,87 @@ async def chat_endpoint(request: ChatRequest, current_user: dict = Depends(get_c
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat-with-file", summary="Chat with optional file input (OpenAI file_id method)")
+async def chat_with_file(
+    messages: str = Form(...),  # JSON stringified list of messages
+    user_id: str = Form(...),
+    conversation_id: str = Form(None),
+    file: UploadFile = File(None),
+    current_user: dict = Depends(get_current_user)
+):
+    # Parse JSON string of messages
+    try:
+        msgs = json.loads(messages)
+        if not isinstance(msgs, list):
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON for messages.")
+
+    try:
+        result = await chat_with_assistant_file(
+            messages=msgs,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            file=file
+        )
+        return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat-with-upload", summary="Send a message with file upload (OpenAI file_id method)")
+async def chat_with_upload(
+    user_id: str = Form(...),
+    conversation_id: str = Form(...),
+    messages: str = Form(...),  # JSON string of message dicts (text parts)
+    file: UploadFile = File(None),
+    current_user: dict = Depends(get_current_user)
+):
+    # Step 1: Parse messages
+    try:
+        msgs = json.loads(messages)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON for messages.")
+
+    # Step 2: If file, upload to OpenAI and get file_id
+    file_id = None
+    if file:
+        try:
+            uploaded = client.files.create(
+                file=file.file,  # FastAPI's UploadFile.file is a file-like object
+                purpose="user_data"
+            )
+            file_id = uploaded.id
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"File upload to OpenAI failed: {e}")
+
+    # Step 3: Build chat messages for OpenAI
+    content_block = []
+    if file_id:
+        content_block.append({
+            "type": "file",
+            "file": {"file_id": file_id}
+        })
+    # Append all text and/or other messages provided
+    for part in msgs:
+        content_block.append(part)
+
+    # Step 4: Send chat completion to OpenAI
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "user", "content": content_block}
+            ]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OpenAI chat completion failed: {e}")
+
+    reply = completion.choices[0].message.content
+    return {"reply": reply, "file_id": file_id}
+
 
 @router.post("/new", response_model=NewChatResponse, summary="Start a new chat thread")
 async def start_new_chat(req: NewChatRequest, current_user: dict = Depends(get_current_user)):
