@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.db.pinecone import index
 from app.routers.deps import get_current_user
 from app.utils.responses import format_response  # ✅ standardized response
+from app.utils.pagination import build_pagination, build_sort
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -29,11 +30,36 @@ def doc_to_dict(doc):
 # -----------------------------
 # Routes
 # -----------------------------
-
 @router.get("/", summary="List all documents")
-async def list_documents(current_user: dict = Depends(get_current_user)):
-    docs = await documents.find({}).to_list(length=100)  # No filter: returns all docs
-    return format_response(success=True, data={"documents": [doc_to_dict(doc) for doc in docs]})
+async def list_documents(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    current_user: dict = Depends(get_current_user),
+):
+    skip, limit = build_pagination(page, page_size)
+    sort = build_sort(sort_by, sort_order)
+
+    query = {}
+    if search:
+        query["$or"] = [
+            {"filename": {"$regex": search, "$options": "i"}},
+            {"user_id": {"$regex": search, "$options": "i"}},
+        ]
+    total = await documents.count_documents(query)
+    docs = await documents.find(query).sort(sort).skip(skip).limit(limit).to_list(length=page_size)
+
+    return format_response(
+        success=True,
+        data={
+            "documents": [doc_to_dict(doc) for doc in docs],
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        }
+    )
 
 @router.get("/{document_id}", summary="Get document metadata by ID")
 async def get_document(document_id: str, current_user: dict = Depends(get_current_user)):
