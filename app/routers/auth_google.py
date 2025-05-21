@@ -65,6 +65,7 @@ async def auth_callback(request: Request):
         # 3) Fetch user to get their actual role
         user = await user_collection.find_one({"email": email})
         jwt_payload = {
+            "sub": user["email"],
             "email": user["email"],
             "name": user.get("name", ""),
             "role": user.get("role", "user")   # Always use DB value!
