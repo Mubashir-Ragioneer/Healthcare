@@ -45,29 +45,35 @@ async def auth_callback(request: Request):
         name    = user_info.get("name")
         picture = user_info.get("picture")
 
-        # 2) Upsert your user
         user_collection = db["users"]
-        await user_collection.update_one(
+
+        # 2) Upsert user, default to 'user' role
+        result = await user_collection.update_one(
             {"email": email},
             {
                 "$setOnInsert": {
                     "email":    email,
                     "name":     name,
                     "picture":  picture,
-                    "provider": "google"
+                    "provider": "google",
+                    "role": "user",           # Set role on first insert
                 }
             },
             upsert=True
         )
 
-        # 3) Issue your JWT
-        jwt_token = create_jwt_token({"sub": email})
+        # 3) Fetch user to get their actual role
+        user = await user_collection.find_one({"email": email})
+        jwt_payload = {
+            "sub": user["email"],
+            "name": user.get("name", ""),
+            "role": user.get("role", "user")   # Always use DB value!
+        }
+        jwt_token = create_jwt_token(jwt_payload)
 
-        # Redirect to frontend with token in URL parameters
         return RedirectResponse(
             url=f"{settings.FRONTEND_URL}/login?token={jwt_token}",
             status_code=302
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
