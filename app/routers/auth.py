@@ -121,7 +121,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         print("🔥 Login error:", str(e))
         import traceback
         print("🔥 Stack trace:", traceback.format_exc())
-        raise InternalServerError("Internal Server Error")
+        raise InternalServerError("Internal Server Error: Login failed")
         
 @router.get("/me", summary="Get current user info")
 async def whoami(current_user: dict = Depends(get_current_user)):
