@@ -95,7 +95,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
 
     if not existing_user:
         print("❌ User not found")
-        raise UnauthorizedRequestError("Invalid credentials")
+        raise UnauthorizedRequestError("Invalid credentials: User not found")
 
     # Google-only account: no password available for normal login
     if existing_user.get("provider") == "google" and "password" not in existing_user:
@@ -106,7 +106,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         print("🔑 Verifying password...")
         if not verify_password(user.password, existing_user.get("password", "")):
             print("❌ Password verification failed")
-            raise UnauthorizedRequestError("Invalid credentials")
+            raise UnauthorizedRequestError("Invalid credentials: Password verification failed")
 
         print("✅ Creating access token...")
         access_token = create_access_token(data={
