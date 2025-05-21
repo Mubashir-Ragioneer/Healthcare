@@ -85,8 +85,7 @@ async def signup(user: UserSignup):
         "token_type": "bearer",
         "user": user_doc
     }
-
-
+    
 @router.post("/login", response_model=Token)
 async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
     print("🔍 Attempting login for:", user.email)
@@ -102,26 +101,24 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
         print("❌ Account registered via Google; password login not available.")
         raise UnauthorizedRequestError("This account was registered via Google. Please use Google login.")
 
-    try:
-        print("🔑 Verifying password...")
-        if not verify_password(user.password, existing_user.get("password", "")):
-            print("❌ Password verification failed")
-            raise UnauthorizedRequestError("Invalid credentials: Password verification failed")
+    print("🔑 Verifying password...")
+    if not verify_password(user.password, existing_user.get("password", "")):
+        print("❌ Password verification failed")
+        raise UnauthorizedRequestError("Invalid credentials: Password verification failed")
 
+    try:
         print("✅ Creating access token...")
         access_token = create_access_token(data={
             "sub": str(existing_user["_id"]),
             "email": existing_user["email"],
             "role": existing_user.get("role", "user")
         })
-
         return {"access_token": access_token, "token_type": "bearer"}
-
     except Exception as e:
         print("🔥 Login error:", str(e))
         import traceback
         print("🔥 Stack trace:", traceback.format_exc())
-        raise InternalServerError("Internal Server Error: Login failed")
+        raise HTTPException(status_code=500, detail="Internal Server Error: Login failed")
         
 @router.get("/me", summary="Get current user info")
 async def whoami(current_user: dict = Depends(get_current_user)):
