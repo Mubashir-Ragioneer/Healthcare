@@ -21,8 +21,12 @@ import asyncio  # for async to_thread
 from openai import OpenAI
 from app.core.config import settings
 from app.services.chat_engine import chat_with_assistant_file
+import requests
+import time
+import tempfile
 
 
+ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
 
 UPLOAD_DIR = os.path.abspath("app/uploads")
@@ -79,6 +83,88 @@ async def chat_endpoint(request: ChatRequest, current_user: dict = Depends(get_c
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/chat/audio", summary="Send audio and receive a reply")
+async def chat_with_audio(
+    audio: UploadFile = File(...),
+    user_id: str = Form(...),
+    conversation_id: str = Form(None),
+    current_user: dict = Depends(get_current_user)
+):
+    # 1. Save audio to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        audio_bytes = await audio.read()
+        tmp.write(audio_bytes)
+        filename = tmp.name
+
+    try:
+        # 2. Upload audio to AssemblyAI
+        base_url = "https://api.assemblyai.com"
+        headers = {"authorization": ASSEMBLYAI_API_KEY}
+
+        with open(filename, "rb") as f:
+            upload_res = requests.post(f"{base_url}/v2/upload", headers=headers, data=f)
+        if upload_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Upload failed: {upload_res.text}")
+
+        try:
+            audio_url = upload_res.json().get("upload_url")
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"Upload API did not return JSON: {upload_res.text}")
+
+        # 3. Start transcription
+        data = {"audio_url": audio_url, "speech_model": "universal"}
+        transcript_res = requests.post(f"{base_url}/v2/transcript", json=data, headers=headers)
+        if transcript_res.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Transcription start failed: {transcript_res.text}")
+
+        try:
+            transcript_id = transcript_res.json()["id"]
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"Transcription start did not return JSON: {transcript_res.text}")
+
+        polling_endpoint = f"{base_url}/v2/transcript/{transcript_id}"
+
+        # 4. Poll for transcription result
+        transcribed_text = None
+        for _ in range(60):  # max 2 minutes
+            poll_res = requests.get(polling_endpoint, headers=headers)
+            if poll_res.status_code != 200:
+                raise HTTPException(status_code=500, detail=f"Polling failed: {poll_res.text}")
+
+            try:
+                result = poll_res.json()
+            except Exception:
+                raise HTTPException(status_code=500, detail=f"Polling did not return JSON: {poll_res.text}")
+
+            status = result.get('status')
+            if status == 'completed':
+                transcribed_text = result['text']
+                break
+            elif status == 'error':
+                raise HTTPException(status_code=400, detail=f"Transcription failed: {result.get('error', 'unknown error')}")
+            time.sleep(2)
+        else:
+            raise HTTPException(status_code=504, detail="Transcription timed out after 2 minutes.")
+
+        # 5. Use transcribed text as the chat message!
+        msgs = [{"role": "user", "content": transcribed_text}]
+
+        # 6. Call your chat_with_assistant
+        result = await chat_with_assistant(
+            messages=msgs,
+            user_id=user_id,
+            conversation_id=conversation_id
+        )
+
+        return {
+            "reply": result["reply"],
+            "chat_title": result["chat_title"],
+            "transcribed_text": transcribed_text
+        }
+
+    finally:
+        # Clean up temp file
+        os.remove(filename)
 
 @router.post("/chat-with-file", summary="Chat with optional file input (OpenAI file_id method)")
 async def chat_with_file(
