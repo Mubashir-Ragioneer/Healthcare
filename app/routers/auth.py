@@ -171,14 +171,11 @@ async def logout():
 async def verify_email(token: str):
     user = await users_collection.find_one({"verification_token": token})
     if not user or user.get("verified"):
-        # Optionally, redirect with an error
-        return RedirectResponse(f"{FRONTEND_URL}/login?verified=fail")
-        # Or: raise HTTPException(status_code=400, detail="Invalid or expired verification link.")
+        return JSONResponse(status_code=400, content={"detail": "Invalid or expired verification link."})
 
     expiry = user.get("verification_token_expiry")
     if expiry and datetime.utcnow() > expiry:
-        return RedirectResponse(f"{FRONTEND_URL}/login?verified=expired")
-        # Or: raise HTTPException(status_code=400, detail="Verification link has expired.")
+        return JSONResponse(status_code=400, content={"detail": "Verification link expired."})
 
     await users_collection.update_one(
         {"_id": user["_id"]},
@@ -188,8 +185,7 @@ async def verify_email(token: str):
         }
     )
 
-    # Redirect to frontend with a success message
-    return RedirectResponse(f"{FRONTEND_URL}/login?verified=success")
+    return JSONResponse({"message": "Email verified successfully."})
 
 @router.post("/resend-verification")
 async def resend_verification(data: dict):
