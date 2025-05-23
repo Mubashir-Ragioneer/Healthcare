@@ -57,6 +57,9 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
 @router.post("/signup", summary="Create a new user")
 async def signup(user: UserSignup):
     existing = await users_collection.find_one({"email": user.email})
@@ -187,19 +190,16 @@ async def verify_email(token: str):
 
     return JSONResponse({"message": "Email verified successfully."})
 
-@router.post("/resend-verification")
-async def resend_verification(data: dict):
-    email = data.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required.")
 
+@router.post("/resend-verification")
+async def resend_verification(req: ResendVerificationRequest):
+    email = req.email
     user = await users_collection.find_one({"email": email})
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     if user.get("verified"):
         raise HTTPException(status_code=400, detail="Email already verified.")
 
-    # Generate new token and expiry
     verification_token = secrets.token_urlsafe(32)
     verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
     await users_collection.update_one(
@@ -211,6 +211,6 @@ async def resend_verification(data: dict):
             }
         }
     )
-    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}"
+    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}&email={email}"
     await send_verification_email(email, verification_link)
     return {"message": "Verification email resent. Please check your inbox."}
