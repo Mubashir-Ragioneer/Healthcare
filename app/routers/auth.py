@@ -10,14 +10,18 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from bson.errors import InvalidId
 from app.db.mongo import users_collection
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from app.utils.responses import format_response
 from app.db.mongo import get_db
 from typing import Literal
 from app.routers.deps import get_current_user
 from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFoundError, ConflictError, InternalServerError
+import secrets
+from datetime import timedelta
+from app.utils.email import send_verification_email
+import os
 
-
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://healthcare.ragioneer.com")
 
 router = APIRouter(tags=["auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -60,30 +64,38 @@ async def signup(user: UserSignup):
         raise ConflictError("Email already registered")
 
     hashed_password = pwd_context.hash(user.password)
-    result = await users_collection.insert_one({
+    verification_token = secrets.token_urlsafe(32)
+    verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
+
+    user_doc = {
         "full_name": user.full_name,
         "email": user.email,
         "phone_number": user.phone_number,
         "diagnosis": user.diagnosis,
         "password": hashed_password,
-        "created_at": datetime.utcnow()
-    })
-    # Generate JWT access token for the new user
-    access_token = create_access_token({
-        "sub": str(result.inserted_id),
-        "email": user.email,
-        "role": "user"
-    })
-    # After access_token creation
-    user_doc = await users_collection.find_one({"_id": result.inserted_id})
-    user_doc["_id"] = str(user_doc["_id"])
-    user_doc.pop("password", None)  # Never send password hash!
+        "created_at": datetime.utcnow(),
+        "verified": False,
+        "verification_token": verification_token,
+        "verification_token_expiry": verification_token_expiry,
+    }
+
+    result = await users_collection.insert_one(user_doc)
+    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}"
+
+    # SEND EMAIL!
+    try:
+        await send_verification_email(user.email, verification_link)
+    except Exception as e:
+        # Cleanup if email sending fails
+        await users_collection.delete_one({"_id": result.inserted_id})
+        raise HTTPException(status_code=500, detail=f"Failed to send verification email: {e}")
 
     return {
-        "message": "User registered successfully",
-        "access_token": access_token,
-        "token_type": "bearer",
-        "user": user_doc
+        "message": "User registered successfully. Please check your email to verify your account.",
+        "user": {
+            "email": user.email,
+            "verified": False
+        }
     }
     
 @router.post("/login", response_model=Token)
@@ -100,6 +112,12 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
     if existing_user.get("provider") == "google" and "password" not in existing_user:
         print("❌ Account registered via Google; password login not available.")
         raise UnauthorizedRequestError("This account was registered via Google. Please use Google login.")
+
+    # Block unverified users
+    if not existing_user.get("verified", False):
+        raise UnauthorizedRequestError(
+            "Email not verified. Please check your inbox for a verification email."
+        )
 
     print("🔑 Verifying password...")
     if not verify_password(user.password, existing_user.get("password", "")):
@@ -149,3 +167,54 @@ async def logout():
     )
     return response
 
+@router.get("/verify-email")
+async def verify_email(token: str):
+    user = await users_collection.find_one({"verification_token": token})
+    if not user or user.get("verified"):
+        # Optionally, redirect with an error
+        return RedirectResponse(f"{FRONTEND_URL}/login?verified=fail")
+        # Or: raise HTTPException(status_code=400, detail="Invalid or expired verification link.")
+
+    expiry = user.get("verification_token_expiry")
+    if expiry and datetime.utcnow() > expiry:
+        return RedirectResponse(f"{FRONTEND_URL}/login?verified=expired")
+        # Or: raise HTTPException(status_code=400, detail="Verification link has expired.")
+
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"verified": True},
+            "$unset": {"verification_token": "", "verification_token_expiry": ""}
+        }
+    )
+
+    # Redirect to frontend with a success message
+    return RedirectResponse(f"{FRONTEND_URL}/login?verified=success")
+
+@router.post("/resend-verification")
+async def resend_verification(data: dict):
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required.")
+
+    user = await users_collection.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if user.get("verified"):
+        raise HTTPException(status_code=400, detail="Email already verified.")
+
+    # Generate new token and expiry
+    verification_token = secrets.token_urlsafe(32)
+    verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "verification_token": verification_token,
+                "verification_token_expiry": verification_token_expiry
+            }
+        }
+    )
+    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}"
+    await send_verification_email(email, verification_link)
+    return {"message": "Verification email resent. Please check your inbox."}
