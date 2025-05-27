@@ -30,7 +30,7 @@ def doc_to_dict(doc):
 # -----------------------------
 # Routes
 # -----------------------------
-@router.get("/", summary="List all documents")
+@router.get("", summary="List all documents")
 async def list_documents(
     page: int = 1,
     page_size: int = 20,

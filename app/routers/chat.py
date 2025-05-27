@@ -15,7 +15,7 @@ from app.db.mongo import db
 from bson import ObjectId
 from app.db.mongo import conversation_collection
 from app.utils.responses import format_response
-from app.services.kommo import push_clinical_trial_lead, post_to_google_sheets
+from app.services.kommo import push_clinical_trial_lead
 from app.services.find_specialist_engine import find_specialist_response
 import logging
 from app.schemas.specialist import FindSpecialistRequest, SpecialistSuggestion
@@ -23,11 +23,13 @@ import asyncio  # for async to_thread
 from openai import OpenAI
 from app.core.config import settings
 from app.services.chat_engine import chat_with_assistant_file
+from app.services.google import upload_file_to_drive, post_to_google_sheets
+from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
 import requests
 import time
 import tempfile
-from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
-from pydantic import ValidationError          # ✅ Catch schema validation failure
+from pydantic import ValidationError  
+from app.core.logger import logger
 
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
@@ -334,6 +336,8 @@ async def get_chat_history(conversation_id: str, current_user: dict = Depends(ge
 @router.post("/clinical-trial", summary="Submit clinical trial intake form")
 async def submit_clinical_trial(
     full_name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(...),
     diagnosis: str = Form(...),
     medications: Optional[str] = Form(""),
     test_results_description: Optional[str] = Form(""),
@@ -345,37 +349,53 @@ async def submit_clinical_trial(
     current_user: dict = Depends(get_current_user)
 ):
     try:
-        # Ensure upload directory exists
         os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-        # Handle file upload
         file_path = None
+        google_drive_link = None
+
+        # ✅ Save locally and upload to Drive
         if test_results_file:
             ext = test_results_file.filename.split(".")[-1]
-            filename = f"{uuid4()}.{ext}"
-            file_path = os.path.join(UPLOAD_DIR, filename)
+            local_filename = f"{uuid4()}.{ext}"
+            file_path = os.path.join(UPLOAD_DIR, local_filename)
+
             with open(file_path, "wb") as f:
                 f.write(await test_results_file.read())
 
-        # Prepare data
+            google_drive_link = upload_file_to_drive(file_path, test_results_file.filename)
+            logger.info("✅ File uploaded to Google Drive: %s", google_drive_link)
+
+        # 📦 Prepare form data
         form_data = {
             "full_name": full_name,
+            "email": email,
+            "phone": phone,
             "diagnosis": diagnosis,
             "medications": medications,
             "test_results_description": test_results_description,
             "lead_source": lead_source,
-            "uploaded_file_path": file_path,
+            "google_drive_link": google_drive_link,
         }
 
-        # Save in MongoDB
+        # 💾 Store in MongoDB
         await db["clinical_trial_uploads"].insert_one({
             **form_data,
             "submitted_at": datetime.utcnow()
         })
+        logger.info("💾 Data saved to MongoDB for %s", email)
 
-        # Send to integrations
-        await push_clinical_trial_lead(form_data)
+        # 🔁 External integrations
+        await push_clinical_trial_lead({**form_data, "uploaded_file_path": file_path})
+        logger.info("📤 Pushed to Kommo")
+
         post_to_google_sheets(form_data)
+        logger.info("✅ Posted to Google Sheets")
+
+        # 🧹 Clean up temp file
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info("🧹 Temp file deleted: %s", file_path)
 
         return {
             "success": True,
@@ -383,10 +403,9 @@ async def submit_clinical_trial(
         }
 
     except Exception as e:
-        print("❌ Error in /clinical-trial:", str(e))
-        raise HTTPException(status_code=500, detail="Submission failed")
-
-
+        logger.exception("❌ Error in /clinical-trial")
+        raise HTTPException(status_code=500, detail=f"Submission failed: {str(e)}")
+        
 @router.get("/conversations/{user_id}", summary="Get all conversations by user_id (email)")
 async def get_user_conversations_by_id(user_id: str, current_user: dict = Depends(get_current_user)):
     try:
