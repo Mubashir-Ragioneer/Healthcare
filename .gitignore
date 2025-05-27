@@ -54,3 +54,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+# GCP Secrets
+service-account.json
+app/credentials/service-account.json
+credentials/
