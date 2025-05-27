@@ -43,7 +43,7 @@ class LLMSettings(BaseModel):
 
     @validator("model")
     def validate_model(cls, v):
-        allowed = {"gpt-4o", settings.LLM_MODEL}
+        allowed = {"gpt-4o","gpt-4o-mini", "gpt-3.5-turbo", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"}
         if v not in allowed:
             raise ValueError(f"Unsupported model: {v}")
         return v

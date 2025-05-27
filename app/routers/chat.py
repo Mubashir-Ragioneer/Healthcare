@@ -6,6 +6,8 @@ from typing import Literal, List, Optional, Dict, Any
 from fastapi.responses import JSONResponse
 from uuid import uuid4
 from datetime import datetime
+from openai import OpenAI
+from app.core.config import settings
 from app.services.kommo import push_lead_to_kommo
 from app.routers.deps import get_current_user
 from app.services.chat_engine import chat_with_assistant, conversations
@@ -24,65 +26,73 @@ from app.services.chat_engine import chat_with_assistant_file
 import requests
 import time
 import tempfile
+from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
+from pydantic import ValidationError          # ✅ Catch schema validation failure
 
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
-
+# OpenAI client
+client = OpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url=settings.OPENAI_BASE_URL,
+)
 UPLOAD_DIR = os.path.abspath("app/uploads")
 
 router = APIRouter(tags=["chat"])
 
 # ---------------------
-# Request / Response Models
-# ---------------------
-
-class Message(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
-
-class ChatRequest(BaseModel):
-    messages: List[Message]
-    user_id: str
-    conversation_id: str
-    #mode: Optional[str] = "ask_anything"  # ask_anything, find_specialist, find_test, have_ibd
-
-
-class ChatResponse(BaseModel):
-    reply: str
-    chat_title: str
-
-class NewChatRequest(BaseModel):
-    user_id: str
-
-class NewChatResponse(BaseModel):
-    conversation_id: str
-    chat_title: str
-
-# ---------------------
 # Chat Routes
 # ---------------------
-@router.post("", response_model=ChatResponse, summary="Send a message and receive a reply")
-async def chat_endpoint(request: ChatRequest, current_user: dict = Depends(get_current_user)):
-    try:
-        msgs = [msg.dict() for msg in request.messages]
+@router.post(
+    "",
+    response_model=ChatResponse,
+    summary="Send a message and receive a reply"
+)
+async def chat_endpoint(
+    request: ChatRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    # 1️⃣ Validate input
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="At least one message must be provided.")
 
+    # 2️⃣ Ensure we have a conversation_id (new or existing)
+    conv_id = request.conversation_id or str(uuid4())
+
+    # 3️⃣ Prepare the payload
+    msgs = [msg.dict() for msg in request.messages]
+
+    try:
+        # 4️⃣ Call the service
         result = await chat_with_assistant(
             messages=msgs,
             user_id=request.user_id,
-            conversation_id=request.conversation_id
+            conversation_id=conv_id
         )
 
-        return ChatResponse(
-            reply=result["reply"],
-            chat_title=result["chat_title"]
+    except RuntimeError as e:
+        logging.error("LLM service error: %s", e, exc_info=True)
+        # 502 for upstream model failures
+        raise HTTPException(
+            status_code=502,
+            detail="Language model service unavailable. Please try again later."
         )
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.exception("Unexpected error in chat_endpoint")
+        # 500 for anything else
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
 
+    # 5️⃣ Return the reply, title—and the conversation_id so the frontend can thread future requests.
+    return ChatResponse(
+        reply=result["reply"],
+        chat_title=result["chat_title"],
+        conversation_id=conv_id
+    )
 @router.post("/chat/audio", summary="Send audio and receive a reply")
 async def chat_with_audio(
     audio: UploadFile = File(...),
@@ -168,26 +178,63 @@ async def chat_with_audio(
 
 @router.post("/chat-with-file", summary="Chat with optional file input (OpenAI file_id method)")
 async def chat_with_file(
-    messages: str = Form(...),  # JSON stringified list of messages
     user_id: str = Form(...),
+    message: str = Form(...),             # Simple string, not JSON!
     conversation_id: str = Form(None),
     file: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
-    # Parse JSON string of messages
-    try:
-        msgs = json.loads(messages)
-        if not isinstance(msgs, list):
-            raise ValueError
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON for messages.")
+    # Step 1: Build the message content (OpenAI expects a list)
+    content_blocks = []
 
+    # Step 2: Upload file to OpenAI if present
+    if file:
+        import os
+        from app.services.chat_engine import client  # or however your OpenAI client is imported
+
+        suffix = "." + file.filename.split(".")[-1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(await file.read())
+            tmp.flush()
+            tmp.seek(0)
+            tmp_name = tmp.name
+
+        try:
+            with open(tmp_name, "rb") as f:
+                uploaded = client.files.create(
+                    file=f,
+                    purpose="assistants",  # For OpenAI Assistant API
+                )
+                file_id = uploaded.id
+                logging.info(f"Uploaded file to OpenAI: {file.filename} -> file_id={file_id}")
+            # Required sleep to avoid race condition (sometimes)
+            time.sleep(2)
+            content_blocks.append({"type": "file", "file": {"file_id": file_id}})
+        except Exception as e:
+            logging.error(f"File upload to OpenAI failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="File upload to OpenAI failed.")
+        finally:
+            os.remove(tmp_name)
+    
+    # Step 3: Add the text as the user’s message (always required)
+    content_blocks.append({"type": "text", "text": message})  # message is a string
+
+
+    # Step 4: Build OpenAI chat message
+    openai_messages = [{
+        "role": "user",
+        "content": content_blocks
+    }]
+    print("Final openai_messages", openai_messages)
+
+    # Step 5: Call your assistant (pass the built message)
+    from app.services.chat_engine import chat_with_assistant_file
     try:
         result = await chat_with_assistant_file(
-            messages=msgs,
+            messages=openai_messages,     # <--- Correct format!
             user_id=user_id,
             conversation_id=conversation_id,
-            file=file
+            file=None  # Already handled!
         )
         return result
     except RuntimeError as e:

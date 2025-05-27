@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     )
     LLM_TEMPERATURE: float = Field(default=0.6, env="LLM_TEMPERATURE")
     LLM_MAX_TOKENS: int = Field(default=1024, env="LLM_MAX_TOKENS")
-    LLM_MODEL: str = Field(default="gpt-4o", env="LLM_MODEL")
+    LLM_MODEL: str = Field(default="gpt-4.1", env="LLM_MODEL")
 
     # Auth/JWT settings
     SECRET_KEY: str = Field(..., env="SECRET_KEY")  # ✅ Added for auth
