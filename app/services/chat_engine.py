@@ -9,6 +9,8 @@ from uuid import uuid4
 from typing import List, Dict, Any, Optional
 import asyncio
 import json
+import time
+import tempfile
 import os
 import logging
 from fastapi import UploadFile
@@ -70,7 +72,8 @@ async def chat_with_assistant(
     conv_id = conversation_id or str(uuid4())
 
     # retrieve semantic context for the last user message
-    query = messages[-1]["content"]
+    recent_history = [msg["content"] for msg in messages[-5:] if msg["role"] == "user"]
+    query = "\n".join(recent_history)
     matches = await search_similar_chunks(query)
     context_chunks = [m["metadata"]["chunk_text"] for m in matches]
     context_block = "\n--\n".join(context_chunks[:3])
@@ -161,8 +164,7 @@ async def chat_with_assistant_file(
     conversation_id: Optional[str] = None,
     file: UploadFile = None
 ) -> Dict[str, str]:
-    import time
-    import tempfile
+    
     # 1. Retrieve semantic context
     query = ""
     for block in messages[-1]["content"]:
