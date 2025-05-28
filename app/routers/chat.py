@@ -23,14 +23,13 @@ import asyncio  # for async to_thread
 from openai import OpenAI
 from app.core.config import settings
 from app.services.chat_engine import chat_with_assistant_file
-from app.services.google import upload_file_to_drive, post_to_google_sheets
+from app.services.google import upload_file_to_drive, post_to_google_sheets, post_to_google_sheets_clinical_trial
 from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
 import requests
 import time
 import tempfile
 from pydantic import ValidationError  
 from app.core.logger import logger
-
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
@@ -335,10 +334,10 @@ async def get_chat_history(conversation_id: str, current_user: dict = Depends(ge
 
 @router.post("/clinical-trial", summary="Submit clinical trial intake form")
 async def submit_clinical_trial(
-    full_name: str = Form(...),
-    email: str = Form(...),
-    phone: str = Form(...),
-    diagnosis: str = Form(...),
+    full_name: Optional[str] = Form(""),
+    email: Optional[str] = Form(""),
+    phone: Optional[str] = Form(""),
+    diagnosis: Optional[str] = Form(""),
     medications: Optional[str] = Form(""),
     test_results_description: Optional[str] = Form(""),
     lead_source: Optional[str] = Form("nudii.com.br"),
@@ -389,7 +388,7 @@ async def submit_clinical_trial(
         await push_clinical_trial_lead({**form_data, "uploaded_file_path": file_path})
         logger.info("📤 Pushed to Kommo")
 
-        post_to_google_sheets(form_data)
+        post_to_google_sheets_clinical_trial(form_data)
         logger.info("✅ Posted to Google Sheets")
 
         # 🧹 Clean up temp file
@@ -405,7 +404,7 @@ async def submit_clinical_trial(
     except Exception as e:
         logger.exception("❌ Error in /clinical-trial")
         raise HTTPException(status_code=500, detail=f"Submission failed: {str(e)}")
-        
+
 @router.get("/conversations/{user_id}", summary="Get all conversations by user_id (email)")
 async def get_user_conversations_by_id(user_id: str, current_user: dict = Depends(get_current_user)):
     try:

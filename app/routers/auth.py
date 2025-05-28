@@ -1,7 +1,7 @@
 # app/routers/auth.py
 
 from fastapi import APIRouter, HTTPException, Depends, Body
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from app.core.config import settings
@@ -19,6 +19,7 @@ from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFound
 import secrets
 from datetime import timedelta
 from app.utils.email import send_verification_email, send_password_reset_email
+from app.services.google import post_to_google_sheets_signup
 import os
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
@@ -46,6 +47,8 @@ class UserSignup(BaseModel):
     phone_number: str
     password: str
     diagnosis: Literal["crohns", "colitis", "undiagnosed"]
+    lead_source: str = Field("website", description="Where the user came from (e.g., 'website', 'nudii.com.br', etc.)")
+
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -90,17 +93,25 @@ async def signup(user: UserSignup):
         "verified": False,
         "verification_token": verification_token,
         "verification_token_expiry": verification_token_expiry,
+        "lead_source": user.lead_source,
     }
 
     result = await users_collection.insert_one(user_doc)
     verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}&email={user.email}"
 
+    # ✅ Push to Google Sheets
+    try:
+        post_to_google_sheets_signup(user_doc)
+    except Exception as e:
+        # Not critical, so just log
+        import traceback
+        print("Google Sheets signup push failed:", e)
+        print(traceback.format_exc())
 
     # SEND EMAIL!
     try:
         await send_verification_email(user.email, verification_link)
     except Exception as e:
-        # Cleanup if email sending fails
         await users_collection.delete_one({"_id": result.inserted_id})
         raise HTTPException(status_code=500, detail=f"Failed to send verification email: {e}")
 
@@ -351,4 +362,3 @@ async def complete_profile(
         {"$set": {"diagnosis": diagnosis}}
     )
     return {"success": True, "message": "Profile updated."}
-    

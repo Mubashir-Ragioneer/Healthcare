@@ -6,6 +6,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from app.core.credentials import get_gcp_credentials
 from app.core.logger import logger
+from datetime import datetime
 
 # Load configs from environment
 GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
@@ -67,3 +68,38 @@ def post_to_google_sheets(form_data: dict):
             logger.error(f"❌ Failed to send data to Google Sheets: {response.text}")
     except Exception as e:
         logger.exception(f"❌ Exception while posting to Sheets: {e}")
+
+def post_to_google_sheets_signup(user_doc: dict):
+
+    sheet_row = {
+        "Timestamp": user_doc["created_at"].strftime("%m/%d/%Y %H:%M"),
+        "Full Name": user_doc["full_name"],
+        "Email": user_doc["email"],
+        "Phone": user_doc["phone_number"],
+        "Diagnosis": user_doc["diagnosis"],
+        "Medications": "",
+        "Test Results Description": "",
+        "Lead Source": user_doc.get("lead_source", ""),
+        "Google Drive Link": "",
+    }
+    print("SENDING TO SHEETS:", sheet_row)
+    post_to_google_sheets(sheet_row)
+
+
+def post_to_google_sheets_clinical_trial(form_data: dict):
+    """
+    Maps clinical trial intake form data to Google Sheets row fields exactly.
+    """
+    # Map keys to match your Google Sheet headers
+    sheet_row = {
+        "Timestamp": datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
+        "Full Name": form_data.get("full_name", ""),
+        "Email": form_data.get("email", ""),
+        "Phone": form_data.get("phone", ""),
+        "Diagnosis": form_data.get("diagnosis", ""),
+        "Medications": form_data.get("medications", ""),
+        "Test Results Description": form_data.get("test_results_description", ""),
+        "Lead Source": form_data.get("lead_source", ""),
+        "Google Drive Link": form_data.get("google_drive_link", ""),
+    }
+    post_to_google_sheets(sheet_row)
