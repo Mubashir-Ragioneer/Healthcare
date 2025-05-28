@@ -337,3 +337,18 @@ async def set_diagnosis(
     if result.modified_count == 1:
         return format_response(success=True, message="Diagnosis updated")
     raise HTTPException(status_code=400, detail="Failed to update diagnosis")
+
+@router.patch("/complete-profile", summary="Complete profile after Google login")
+async def complete_profile(
+    diagnosis: str = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user)
+):
+    email = current_user.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="User email missing from token.")
+    await users_collection.update_one(
+        {"email": email},
+        {"$set": {"diagnosis": diagnosis}}
+    )
+    return {"success": True, "message": "Profile updated."}
+    
