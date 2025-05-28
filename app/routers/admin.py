@@ -246,6 +246,40 @@ async def list_admin_users(
         }
     )
 
+@router.delete("/delete-user-by-email/{email}", summary="Delete any user by email")
+async def delete_user_by_email(
+    email: str,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Deletes a user by email. Admins cannot delete themselves or any Owner.
+    Only the Owner can delete other Owners (including self).
+    """
+    email = email.strip().lower()
+    current_email = current_user.get("email", "").strip().lower()
+    current_role = current_user.get("role")
+
+    if email == current_email:
+        if current_role != "owner":
+            raise ForbiddenError("Only the Owner can delete themselves.")
+
+    user = await users_collection.find_one({"email": email})
+    if not user:
+        raise NotFoundError("User not found.")
+
+    target_role = user.get("role")
+
+    if target_role == "owner" and current_role != "owner":
+        raise ForbiddenError("Only the Owner can delete another Owner.")
+
+    result = await users_collection.delete_one({"email": email})
+    if result.deleted_count == 0:
+        raise InternalServerError("Failed to delete user.")
+
+    return format_response(
+        success=True,
+        message=f"User '{email}' has been deleted."
+    )
 
 @router.delete("/remove-admin-by-email/{email}", summary="Demote an admin to user by email")
 async def remove_admin_by_email(
@@ -254,58 +288,63 @@ async def remove_admin_by_email(
 ):
     """
     Demote an admin to a regular user, by email.
-    Restricts an admin from demoting themselves.
+    Admins cannot demote themselves or the Owner.
+    Only the Owner can demote other Owners.
     """
-    # Debug: print who is logged in
-    print(f"Current admin performing action: {current_user}")
+    email = email.strip().lower()
+    current_email = current_user.get("email", "").strip().lower()
+    current_role = current_user.get("role")
 
-    # Case-insensitive comparison, strip spaces
-    if email.strip().lower() == str(current_user.get("email", "")).strip().lower():
-        print("🛑 Attempted self-demotion blocked.")
+    if email == current_email:
         raise ForbiddenError("You cannot demote yourself.")
 
     user = await users_collection.find_one({"email": email})
     if not user:
         raise NotFoundError("User not found.")
 
-    if user.get("role") != "admin":
-        raise BadRequestError("User is not an admin.")
+    target_role = user.get("role")
+
+    if target_role == "owner":
+        if current_role != "owner":
+            raise ForbiddenError("Only the Owner can demote another Owner.")
+    
+    if target_role != "admin" and target_role != "owner":
+        raise BadRequestError("Target user is not an admin or owner.")
 
     await users_collection.update_one(
         {"email": email},
         {"$set": {"role": "user"}}
     )
 
-    return {
-        "success": True,
-        "message": f"User '{email}' is no longer an admin."
-    }
-@router.delete("/delete-user-by-email/{email}", summary="Delete any user by email")
-async def delete_user_by_email(
-    email: str,
-    current_user: dict = Depends(require_admin)
-):
-    """
-    Deletes a user (admin or non-admin) by their email address.
-    Prevents admins from deleting themselves.
-    """
-    # Case-insensitive comparison to block self-deletion
-    if email.strip().lower() == str(current_user.get("email", "")).strip().lower():
-        raise ForbiddenError("You cannot delete yourself.")
-
-    user = await users_collection.find_one({"email": email})
-    if not user:
-        raise NotFoundError("User not found.")
-
-    result = await users_collection.delete_one({"email": email})
-
-    if result.deleted_count == 0:
-        raise InternalServerError("Failed to delete user.")
-
     return format_response(
         success=True,
-        message=f"User '{email}' has been deleted."
+        message=f"User '{email}' has been demoted to 'user'."
     )
+@router.post("/transfer-ownership/{new_owner_email}", summary="Transfer ownership to another user")
+async def transfer_ownership(
+    new_owner_email: str,
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "owner":
+        raise ForbiddenError("Only the current Owner can transfer ownership.")
+
+    user = await users_collection.find_one({"email": new_owner_email})
+    if not user:
+        raise NotFoundError("Target user not found")
+
+    # Downgrade current owner to admin
+    await users_collection.update_one(
+        {"email": current_user["email"]},
+        {"$set": {"role": "admin"}}
+    )
+
+    # Promote new owner
+    await users_collection.update_one(
+        {"email": new_owner_email},
+        {"$set": {"role": "owner"}}
+    )
+
+    return format_response(success=True, message=f"Ownership transferred to {new_owner_email}")
 
 
 @router.get("/me")

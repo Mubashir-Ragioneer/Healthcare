@@ -77,6 +77,7 @@ async def signup(user: UserSignup):
         "diagnosis": user.diagnosis,
         "password": hashed_password,
         "created_at": datetime.utcnow(),
+        "role": "user",
         "verified": False,
         "verification_token": verification_token,
         "verification_token_expiry": verification_token_expiry,

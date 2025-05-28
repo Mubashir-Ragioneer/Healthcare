@@ -23,9 +23,7 @@ def get_current_user(token: HTTPAuthorizationCredentials = Security(bearer_schem
             detail="Could not validate credentials"
         )
 
-
-
 def require_admin(current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "admin":
+    if current_user.get("role") not in {"admin", "owner"}:
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
