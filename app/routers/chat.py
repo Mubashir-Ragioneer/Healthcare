@@ -334,9 +334,7 @@ async def get_chat_history(conversation_id: str, current_user: dict = Depends(ge
 
 @router.post("/clinical-trial", summary="Submit clinical trial intake form")
 async def submit_clinical_trial(
-    full_name: Optional[str] = Form(""),
     email: Optional[str] = Form(""),
-    phone: Optional[str] = Form(""),
     diagnosis: Optional[str] = Form(""),
     medications: Optional[str] = Form(""),
     test_results_description: Optional[str] = Form(""),
@@ -367,14 +365,12 @@ async def submit_clinical_trial(
 
         # 📦 Prepare form data
         form_data = {
-            "full_name": full_name,
             "email": email,
-            "phone": phone,
             "diagnosis": diagnosis,
             "medications": medications,
             "test_results_description": test_results_description,
             "lead_source": lead_source,
-            "google_drive_link": google_drive_link,
+            "google_drive_link": google_drive_link
         }
 
         # 💾 Store in MongoDB
@@ -384,8 +380,8 @@ async def submit_clinical_trial(
         })
         logger.info("💾 Data saved to MongoDB for %s", email)
 
-        # 🔁 External integrations
-        await push_clinical_trial_lead({**form_data, "uploaded_file_path": file_path})
+        # # 🔁 External integrations
+        # await push_clinical_trial_lead({**form_data, "uploaded_file_path": file_path})
         logger.info("📤 Pushed to Kommo")
 
         post_to_google_sheets_clinical_trial(form_data)

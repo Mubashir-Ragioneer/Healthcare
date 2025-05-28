@@ -93,9 +93,7 @@ def post_to_google_sheets_clinical_trial(form_data: dict):
     # Map keys to match your Google Sheet headers
     sheet_row = {
         "Timestamp": datetime.utcnow().strftime("%m/%d/%Y %H:%M"),
-        "Full Name": form_data.get("full_name", ""),
         "Email": form_data.get("email", ""),
-        "Phone": form_data.get("phone", ""),
         "Diagnosis": form_data.get("diagnosis", ""),
         "Medications": form_data.get("medications", ""),
         "Test Results Description": form_data.get("test_results_description", ""),
