@@ -64,11 +64,14 @@ async def auth_callback(request: Request):
 
         # 3) Fetch user to get their actual role
         user = await user_collection.find_one({"email": email})
+        needs_profile_completion = not bool(user.get("diagnosis"))
+
         jwt_payload = {
             "sub": user["email"],
             "email": user["email"],
             "name": user.get("name", ""),
-            "role": user.get("role", "user")   # Always use DB value!
+            "role": user.get("role", "user"),
+            "needs_profile_completion": needs_profile_completion
         }
         jwt_token = create_jwt_token(jwt_payload)
 
