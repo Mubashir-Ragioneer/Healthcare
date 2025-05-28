@@ -18,7 +18,7 @@ from app.routers.deps import get_current_user
 from app.utils.errors import UnauthorizedRequestError, BadRequestError, NotFoundError, ConflictError, InternalServerError
 import secrets
 from datetime import timedelta
-from app.utils.email import send_verification_email
+from app.utils.email import send_verification_email, send_password_reset_email
 import os
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
@@ -51,14 +51,23 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ResetPasswordRequest(BaseModel):
+    token: str
+    email: EmailStr
+    new_password: str
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-class ResendVerificationRequest(BaseModel):
-    email: EmailStr
 
 @router.post("/signup", summary="Create a new user")
 async def signup(user: UserSignup):
@@ -251,3 +260,80 @@ async def resend_verification(req: ResendVerificationRequest):
         "success": True,
         "message": "Verification email sent successfully! Please check your inbox."
     }
+
+
+@router.post("/request-password-reset")
+async def request_password_reset(req: ForgotPasswordRequest):
+    user = await users_collection.find_one({"email": req.email})
+
+    # ✅ NEW: Strict validation
+    if not user:
+        raise NotFoundError("No user found with this email.")
+
+    if not user.get("verified", False):
+        raise UnauthorizedRequestError("Email is not verified.")
+
+    token = secrets.token_urlsafe(32)
+    expiry = datetime.utcnow() + timedelta(hours=1)
+
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "reset_token": token,
+            "reset_token_expiry": expiry
+        }}
+    )
+
+    reset_link = f"{FRONTEND_URL}/reset-password?token={token}&email={req.email}"
+    try:
+        from app.utils.email import send_password_reset_email
+        await send_password_reset_email(req.email, reset_link)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send reset email: {e}")
+
+    return {
+        "success": True,
+        "message": "Reset link sent. Please check your inbox."
+    }
+
+
+
+@router.post("/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    user = await users_collection.find_one({"email": req.email})
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid token or email.")
+
+    if user.get("reset_token") != req.token:
+        raise HTTPException(status_code=400, detail="Invalid reset token.")
+
+    if datetime.utcnow() > user.get("reset_token_expiry", datetime.utcnow()):
+        raise HTTPException(status_code=400, detail="Reset token has expired.")
+
+    hashed = pwd_context.hash(req.new_password)
+
+    await users_collection.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {"password": hashed},
+            "$unset": {"reset_token": "", "reset_token_expiry": ""}
+        }
+    )
+
+    return {"success": True, "message": "Password reset successful. Please log in with your new password."}
+
+
+@router.patch("/me/diagnosis", summary="Set diagnosis for logged-in user")
+async def set_diagnosis(
+    diagnosis: Literal["crohns", "colitis", "undiagnosed"] = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    user_id = current_user.get("user_id") or current_user.get("email")
+    query = {"_id": ObjectId(user_id)} if ObjectId.is_valid(user_id) else {"email": user_id}
+    result = await users_collection.update_one(
+        query,
+        {"$set": {"diagnosis": diagnosis}}
+    )
+    if result.modified_count == 1:
+        return format_response(success=True, message="Diagnosis updated")
+    raise HTTPException(status_code=400, detail="Failed to update diagnosis")
