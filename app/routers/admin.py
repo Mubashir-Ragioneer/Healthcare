@@ -183,13 +183,15 @@ async def get_all_users(
             user["_id"] = str(user["_id"])
             user.pop("password", None)
             users.append({
-                "id": user["_id"],
-                "email": user.get("email"),
-                "name": user.get("name"),
-                "role": user.get("role", "user"),
-                "diagnosis": user.get("diagnosis"),
-                "created_at": user.get("created_at"),
-            })
+            "id": user["_id"],
+            "email": user.get("email"),
+            "name": user.get("name"),
+            "role": user.get("role", "user"),
+            "diagnosis": user.get("diagnosis"),
+            "verified": user.get("verified", False),
+            "created_at": user.get("created_at"),
+        })
+
         return {
             "success": True,
             "users": users,
@@ -199,7 +201,7 @@ async def get_all_users(
         }
     except Exception as e:
         raise InternalServerError(f"Failed to fetch users: {e}")
-        
+
 
 @router.get("/Get-All-Admins", summary="List all admin users")
 async def list_admin_users(
@@ -278,6 +280,33 @@ async def remove_admin_by_email(
         "success": True,
         "message": f"User '{email}' is no longer an admin."
     }
+@router.delete("/delete-user-by-email/{email}", summary="Delete any user by email")
+async def delete_user_by_email(
+    email: str,
+    current_user: dict = Depends(require_admin)
+):
+    """
+    Deletes a user (admin or non-admin) by their email address.
+    Prevents admins from deleting themselves.
+    """
+    # Case-insensitive comparison to block self-deletion
+    if email.strip().lower() == str(current_user.get("email", "")).strip().lower():
+        raise ForbiddenError("You cannot delete yourself.")
+
+    user = await users_collection.find_one({"email": email})
+    if not user:
+        raise NotFoundError("User not found.")
+
+    result = await users_collection.delete_one({"email": email})
+
+    if result.deleted_count == 0:
+        raise InternalServerError("Failed to delete user.")
+
+    return format_response(
+        success=True,
+        message=f"User '{email}' has been deleted."
+    )
+
 
 @router.get("/me")
 async def whoami(current_user: dict = Depends(get_current_user)):
