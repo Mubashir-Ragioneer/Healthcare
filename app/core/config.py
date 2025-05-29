@@ -1,6 +1,6 @@
 # app/core/config.py
 
-from typing import Optional
+from typing import Optional, List
 from pydantic import Field, AnyHttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str
     GOOGLE_REDIRECT_URI: str
 
-    FRONTEND_URL: str
+
+    # Comma-separated list of frontend URLs, e.g. "https://mefia.nudii.com.br,https://mefia.emfoco.med.br"
+    FRONTEND_URL: str = Field(default="https://mefia.nudii.com.br", env="FRONTEND_URL")
+
+    @property
+    def frontend_urls(self) -> List[str]:
+        urls = [url.rstrip("/") for url in self.FRONTEND_URL.split(",") if url.strip()]
+        return list(dict.fromkeys(urls))  # preserves order, removes duplicates
 
 settings = Settings()
+FRONTEND_URLS = settings.frontend_urls

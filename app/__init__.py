@@ -5,6 +5,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.middleware.sessions import SessionMiddleware
+import logging
+
 
 from app.routers import (
     auth,
@@ -43,16 +45,17 @@ app = FastAPI(
 )
 
 # ─── CORS ────────────────────────────────────────────────────────────────
+origins = settings.frontend_urls
+logging.info(f"Allowed CORS origins: {origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.FRONTEND_URL,  # e.g. https://healthcare.ragioneer.com
-        "https://healthcare-app.wittycliff-1e4668a8.eastus.azurecontainerapps.io",
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ─── SESSION (for Authlib state) ───────────────────────────────────────
 app.add_middleware(
