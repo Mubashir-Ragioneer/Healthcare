@@ -338,7 +338,6 @@ async def submit_clinical_trial(
     diagnosis: Optional[str] = Form(""),
     medications: Optional[str] = Form(""),
     test_results_description: Optional[str] = Form(""),
-    lead_source: Optional[str] = Form("nudii.com.br"),
     test_results_file: Optional[UploadFile] = File(
         default=None,
         description="Optional: upload test result file (PDF, image, etc.)"
@@ -364,6 +363,12 @@ async def submit_clinical_trial(
             logger.info("✅ File uploaded to Google Drive: %s", google_drive_link)
 
         # 📦 Prepare form data
+        # Get lead_source from current user (or fetch from DB)
+        lead_source = current_user.get("lead_source")
+        if not lead_source:
+            user_doc = await db["users"].find_one({"email": email})
+            lead_source = user_doc.get("lead_source") if user_doc else None
+
         form_data = {
             "email": email,
             "diagnosis": diagnosis,
