@@ -22,6 +22,10 @@ from app.utils.email import send_verification_email, send_password_reset_email
 from app.services.google import post_to_google_sheets_signup
 import os
 import logging
+from urllib.parse import urlparse
+from app.utils.url import detect_frontend_url
+
+
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
@@ -75,46 +79,13 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-# app/routers/auth.py
-
-from fastapi import APIRouter, HTTPException, Depends, Body, Request
-from pydantic import BaseModel, EmailStr, Field
-from passlib.context import CryptContext
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from app.core.config import settings, FRONTEND_URLS
-from app.db.mongo import users_collection
-from app.utils.email import send_verification_email
-from app.services.google import post_to_google_sheets_signup
-from app.utils.errors import ConflictError
-import jwt
-from datetime import datetime, timedelta
-import secrets
-import logging
-
-router = APIRouter(tags=["auth"])
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-logger = logging.getLogger("auth")
-
-class UserSignup(BaseModel):
-    full_name: str
-    email: EmailStr
-    phone_number: str
-    password: str
-    diagnosis: str  # "crohns", "colitis", "undiagnosed"
-    lead_source: str = Field("website", description="Autodetected or provided (e.g., 'nudii.com.br')")
 
 @router.post("/signup", summary="Create a new user")
 async def signup(user: UserSignup, request: Request):
-    # --- Lead Source Detection Logic ---
-    lead_source = user.lead_source  # Default
-    origin = request.query_params.get("origin")
-    referer = request.headers.get("referer")
-
-    if origin and origin.startswith("http"):
-        lead_source = origin.split("//")[-1].split("/")[0]
-    elif referer and referer.startswith("http"):
-        lead_source = referer.split("//")[-1].split("/")[0]
-    # else: keep default from user.lead_source
+    # --- Detect the frontend for domain-aware logic ---
+    detected_frontend = detect_frontend_url(request)
+    parsed = urlparse(detected_frontend)
+    lead_source = parsed.netloc or detected_frontend.split("//")[-1].split("/")[0]
 
     # --- Duplicate Email Check ---
     existing = await users_collection.find_one({"email": user.email})
@@ -141,7 +112,7 @@ async def signup(user: UserSignup, request: Request):
     }
 
     result = await users_collection.insert_one(user_doc)
-    verification_link = f"{FRONTEND_URLS[0]}/verify-email?token={verification_token}&email={user.email}"
+    verification_link = f"{detected_frontend}/verify-email?token={verification_token}&email={user.email}"
 
     # --- Push to Google Sheets (non-blocking failure) ---
     try:
@@ -273,7 +244,7 @@ async def resend_verification(
 ):
     """
     Resend the email verification link to the user if not yet verified.
-    The verification link respects ?origin param or Referer header if present.
+    The verification link dynamically matches the frontend domain via ?origin or Referer.
     """
     email = req.email.strip().lower()
     logger.info(f"Resend verification requested for: {email}")
@@ -293,16 +264,10 @@ async def resend_verification(
             "message": "Your email is already verified. Please log in."
         }
 
-    # --- Detect correct frontend for the link
-    frontend_url = FRONTEND_URLS[0]  # Default
-    origin = request.query_params.get("origin")
-    referer = request.headers.get("referer")
-    if origin and origin.startswith("http"):
-        frontend_url = origin.rstrip("/")
-    elif referer and referer.startswith("http"):
-        frontend_url = referer.rstrip("/").split("?")[0]  # strip any query params
+    # --- Detect correct frontend for the verification link ---
+    detected_frontend = detect_frontend_url(request)
 
-    # --- Generate new token and expiry
+    # --- Generate new token and expiry ---
     verification_token = secrets.token_urlsafe(32)
     verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
     await users_collection.update_one(
@@ -315,7 +280,7 @@ async def resend_verification(
         }
     )
 
-    verification_link = f"{frontend_url}/verify-email?token={verification_token}&email={user['email']}"
+    verification_link = f"{detected_frontend}/verify-email?token={verification_token}&email={user['email']}"
 
     try:
         await send_verification_email(email, verification_link)
@@ -330,7 +295,6 @@ async def resend_verification(
             "success": False,
             "message": f"Failed to send verification email: {str(e)}"
         }
-
 @router.post("/request-password-reset")
 async def request_password_reset(
     req: ForgotPasswordRequest,
@@ -338,7 +302,7 @@ async def request_password_reset(
 ):
     """
     Sends a password reset link to the user's verified email.
-    The link respects ?origin or Referer header for correct frontend domain.
+    The reset link uses dynamic frontend detection (?origin, Referer, fallback).
     """
     email = req.email.strip().lower()
     logger.info(f"Password reset requested for: {email}")
@@ -354,14 +318,8 @@ async def request_password_reset(
         logger.warning(f"Password reset failed - user not verified: {email}")
         raise UnauthorizedRequestError("Email is not verified.")
 
-    # --- Detect correct frontend for the link
-    frontend_url = FRONTEND_URLS[0]
-    origin = request.query_params.get("origin")
-    referer = request.headers.get("referer")
-    if origin and origin.startswith("http"):
-        frontend_url = origin.rstrip("/")
-    elif referer and referer.startswith("http"):
-        frontend_url = referer.rstrip("/").split("?")[0]
+    # --- Use your utility for frontend URL detection ---
+    frontend_url = detect_frontend_url(request)
 
     # --- Generate reset token
     token = secrets.token_urlsafe(32)
