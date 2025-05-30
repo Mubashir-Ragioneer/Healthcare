@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from app.core.config import settings
+from app.core.config import settings, FRONTEND_URLS
 import jwt
 from datetime import datetime, timedelta
 from bson import ObjectId
@@ -21,6 +21,7 @@ from datetime import timedelta
 from app.utils.email import send_verification_email, send_password_reset_email
 from app.services.google import post_to_google_sheets_signup
 import os
+import logging
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
@@ -29,6 +30,8 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = mongo_client[settings.MONGODB_DB]
 users_collection = db["users"]
+logger = logging.getLogger("auth")
+
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -72,6 +75,8 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+
+
 @router.post("/signup", summary="Create a new user")
 async def signup(user: UserSignup):
     existing = await users_collection.find_one({"email": user.email})
@@ -97,16 +102,15 @@ async def signup(user: UserSignup):
     }
 
     result = await users_collection.insert_one(user_doc)
-    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}&email={user.email}"
+    verification_link = f"{FRONTEND_URLS[0]}/verify-email?token={verification_token}&email={user.email}"
+
 
     # ✅ Push to Google Sheets
     try:
         post_to_google_sheets_signup(user_doc)
     except Exception as e:
-        # Not critical, so just log
-        import traceback
-        print("Google Sheets signup push failed:", e)
-        print(traceback.format_exc())
+        logger.error(f"Google Sheets signup push failed: {e}", exc_info=True)
+
 
     # SEND EMAIL!
     try:
@@ -125,44 +129,43 @@ async def signup(user: UserSignup):
     
 @router.post("/login", response_model=Token)
 async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
-    print("🔍 Attempting login for:", user.email)
+    logger.info(f"Attempting login for: {user.email}")
+
     existing_user = await db["users"].find_one({"email": user.email})
-    print("📝 Found user:", existing_user)
+    logger.debug(f"Found user: {existing_user}")
 
     if not existing_user:
-        print("❌ User not found")
+        logger.warning(f"User not found: {user.email}")
         raise UnauthorizedRequestError("Invalid credentials: User not found")
 
     # Google-only account: no password available for normal login
     if existing_user.get("provider") == "google" and "password" not in existing_user:
-        print("❌ Account registered via Google; password login not available.")
+        logger.warning(f"Account registered via Google; password login not available for {user.email}")
         raise UnauthorizedRequestError("This account was registered via Google. Please use Google login.")
 
     # Block unverified users
     if not existing_user.get("verified", False):
-        raise UnauthorizedRequestError(
-            "Email not verified. Please check your inbox for a verification email."
-        )
+        logger.warning(f"User not verified: {user.email}")
+        raise UnauthorizedRequestError("Email not verified. Please check your inbox for a verification email.")
 
-    print("🔑 Verifying password...")
+    logger.info("Verifying password...")
     if not verify_password(user.password, existing_user.get("password", "")):
-        print("❌ Password verification failed")
+        logger.warning(f"Password verification failed for: {user.email}")
         raise UnauthorizedRequestError("Invalid credentials: Password verification failed")
 
     try:
-        print("✅ Creating access token...")
+        logger.info(f"Creating access token for {user.email}")
         access_token = create_access_token(data={
             "sub": str(existing_user["_id"]),
             "email": existing_user["email"],
             "role": existing_user.get("role", "user")
         })
+        logger.info(f"Login successful for: {user.email}")
         return {"access_token": access_token, "token_type": "bearer"}
     except Exception as e:
-        print("🔥 Login error:", str(e))
-        import traceback
-        print("🔥 Stack trace:", traceback.format_exc())
+        logger.error(f"Login error for {user.email}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal Server Error: Login failed")
-        
+
 @router.get("/me", summary="Get current user info")
 async def whoami(current_user: dict = Depends(get_current_user)):
     sub = current_user.get("user_id")
@@ -257,7 +260,8 @@ async def resend_verification(req: ResendVerificationRequest):
         }
     )
 
-    verification_link = f"{FRONTEND_URL}/verify-email?token={verification_token}&email={email}"
+    verification_link = f"{FRONTEND_URLS[0]}/verify-email?token={verification_token}&email={user.email}"
+
 
     try:
         await send_verification_email(email, verification_link)
@@ -295,7 +299,7 @@ async def request_password_reset(req: ForgotPasswordRequest):
         }}
     )
 
-    reset_link = f"{FRONTEND_URL}/reset-password?token={token}&email={req.email}"
+    reset_link = f"{FRONTEND_URLS[0]}/reset-password?token={token}&email={req.email}"
     try:
         from app.utils.email import send_password_reset_email
         await send_password_reset_email(req.email, reset_link)
