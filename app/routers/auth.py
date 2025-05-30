@@ -1,6 +1,6 @@
 # app/routers/auth.py
 
-from fastapi import APIRouter, HTTPException, Depends, Body
+from fastapi import APIRouter, HTTPException, Depends, Body, Request
 from pydantic import BaseModel, EmailStr, Field
 from passlib.context import CryptContext
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
@@ -75,14 +75,53 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# app/routers/auth.py
 
+from fastapi import APIRouter, HTTPException, Depends, Body, Request
+from pydantic import BaseModel, EmailStr, Field
+from passlib.context import CryptContext
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from app.core.config import settings, FRONTEND_URLS
+from app.db.mongo import users_collection
+from app.utils.email import send_verification_email
+from app.services.google import post_to_google_sheets_signup
+from app.utils.errors import ConflictError
+import jwt
+from datetime import datetime, timedelta
+import secrets
+import logging
+
+router = APIRouter(tags=["auth"])
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+logger = logging.getLogger("auth")
+
+class UserSignup(BaseModel):
+    full_name: str
+    email: EmailStr
+    phone_number: str
+    password: str
+    diagnosis: str  # "crohns", "colitis", "undiagnosed"
+    lead_source: str = Field("website", description="Autodetected or provided (e.g., 'nudii.com.br')")
 
 @router.post("/signup", summary="Create a new user")
-async def signup(user: UserSignup):
+async def signup(user: UserSignup, request: Request):
+    # --- Lead Source Detection Logic ---
+    lead_source = user.lead_source  # Default
+    origin = request.query_params.get("origin")
+    referer = request.headers.get("referer")
+
+    if origin and origin.startswith("http"):
+        lead_source = origin.split("//")[-1].split("/")[0]
+    elif referer and referer.startswith("http"):
+        lead_source = referer.split("//")[-1].split("/")[0]
+    # else: keep default from user.lead_source
+
+    # --- Duplicate Email Check ---
     existing = await users_collection.find_one({"email": user.email})
     if existing:
         raise ConflictError("Email already registered")
 
+    # --- User Creation ---
     hashed_password = pwd_context.hash(user.password)
     verification_token = secrets.token_urlsafe(32)
     verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
@@ -98,21 +137,19 @@ async def signup(user: UserSignup):
         "verified": False,
         "verification_token": verification_token,
         "verification_token_expiry": verification_token_expiry,
-        "lead_source": user.lead_source,
+        "lead_source": lead_source,
     }
 
     result = await users_collection.insert_one(user_doc)
     verification_link = f"{FRONTEND_URLS[0]}/verify-email?token={verification_token}&email={user.email}"
 
-
-    # ✅ Push to Google Sheets
+    # --- Push to Google Sheets (non-blocking failure) ---
     try:
         post_to_google_sheets_signup(user_doc)
     except Exception as e:
         logger.error(f"Google Sheets signup push failed: {e}", exc_info=True)
 
-
-    # SEND EMAIL!
+    # --- Send Verification Email ---
     try:
         await send_verification_email(user.email, verification_link)
     except Exception as e:
@@ -123,9 +160,11 @@ async def signup(user: UserSignup):
         "message": "User registered successfully. Please check your email to verify your account.",
         "user": {
             "email": user.email,
-            "verified": False
+            "verified": False,
+            "lead_source": lead_source,
         }
     }
+
     
 @router.post("/login", response_model=Token)
 async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
@@ -228,26 +267,42 @@ async def verify_email(token: str):
     }
 
 @router.post("/resend-verification")
-async def resend_verification(req: ResendVerificationRequest):
+async def resend_verification(
+    req: ResendVerificationRequest,
+    request: Request
+):
     """
     Resend the email verification link to the user if not yet verified.
+    The verification link respects ?origin param or Referer header if present.
     """
     email = req.email.strip().lower()
-    user = await users_collection.find_one({"email": email})
+    logger.info(f"Resend verification requested for: {email}")
 
+    user = await users_collection.find_one({"email": email})
     if not user:
+        logger.warning(f"User not found for resend verification: {email}")
         return {
             "success": False,
             "message": "User not found."
         }
 
     if user.get("verified", False):
+        logger.info(f"User already verified: {email}")
         return {
             "success": False,
             "message": "Your email is already verified. Please log in."
         }
 
-    # Generate new token and expiry
+    # --- Detect correct frontend for the link
+    frontend_url = FRONTEND_URLS[0]  # Default
+    origin = request.query_params.get("origin")
+    referer = request.headers.get("referer")
+    if origin and origin.startswith("http"):
+        frontend_url = origin.rstrip("/")
+    elif referer and referer.startswith("http"):
+        frontend_url = referer.rstrip("/").split("?")[0]  # strip any query params
+
+    # --- Generate new token and expiry
     verification_token = secrets.token_urlsafe(32)
     verification_token_expiry = datetime.utcnow() + timedelta(hours=1)
     await users_collection.update_one(
@@ -260,37 +315,57 @@ async def resend_verification(req: ResendVerificationRequest):
         }
     )
 
-    verification_link = f"{FRONTEND_URLS[0]}/verify-email?token={verification_token}&email={user.email}"
-
+    verification_link = f"{frontend_url}/verify-email?token={verification_token}&email={user['email']}"
 
     try:
         await send_verification_email(email, verification_link)
+        logger.info(f"Verification email sent to: {email} with link: {verification_link}")
+        return {
+            "success": True,
+            "message": "Verification email sent successfully! Please check your inbox."
+        }
     except Exception as e:
+        logger.error(f"Failed to send verification email to {email}: {e}", exc_info=True)
         return {
             "success": False,
             "message": f"Failed to send verification email: {str(e)}"
         }
 
-    return {
-        "success": True,
-        "message": "Verification email sent successfully! Please check your inbox."
-    }
-
-
 @router.post("/request-password-reset")
-async def request_password_reset(req: ForgotPasswordRequest):
-    user = await users_collection.find_one({"email": req.email})
+async def request_password_reset(
+    req: ForgotPasswordRequest,
+    request: Request
+):
+    """
+    Sends a password reset link to the user's verified email.
+    The link respects ?origin or Referer header for correct frontend domain.
+    """
+    email = req.email.strip().lower()
+    logger.info(f"Password reset requested for: {email}")
 
-    # ✅ NEW: Strict validation
+    user = await users_collection.find_one({"email": email})
+
+    # Strict validation
     if not user:
+        logger.warning(f"Password reset failed - user not found: {email}")
         raise NotFoundError("No user found with this email.")
 
     if not user.get("verified", False):
+        logger.warning(f"Password reset failed - user not verified: {email}")
         raise UnauthorizedRequestError("Email is not verified.")
 
+    # --- Detect correct frontend for the link
+    frontend_url = FRONTEND_URLS[0]
+    origin = request.query_params.get("origin")
+    referer = request.headers.get("referer")
+    if origin and origin.startswith("http"):
+        frontend_url = origin.rstrip("/")
+    elif referer and referer.startswith("http"):
+        frontend_url = referer.rstrip("/").split("?")[0]
+
+    # --- Generate reset token
     token = secrets.token_urlsafe(32)
     expiry = datetime.utcnow() + timedelta(hours=1)
-
     await users_collection.update_one(
         {"_id": user["_id"]},
         {"$set": {
@@ -299,19 +374,19 @@ async def request_password_reset(req: ForgotPasswordRequest):
         }}
     )
 
-    reset_link = f"{FRONTEND_URLS[0]}/reset-password?token={token}&email={req.email}"
+    reset_link = f"{frontend_url}/reset-password?token={token}&email={email}"
+
     try:
         from app.utils.email import send_password_reset_email
-        await send_password_reset_email(req.email, reset_link)
+        await send_password_reset_email(email, reset_link)
+        logger.info(f"Password reset email sent to {email} with link: {reset_link}")
+        return {
+            "success": True,
+            "message": "Reset link sent. Please check your inbox."
+        }
     except Exception as e:
+        logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to send reset email: {e}")
-
-    return {
-        "success": True,
-        "message": "Reset link sent. Please check your inbox."
-    }
-
-
 
 @router.post("/reset-password")
 async def reset_password(req: ResetPasswordRequest):
