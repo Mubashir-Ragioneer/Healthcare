@@ -23,7 +23,7 @@ from app.services.google import post_to_google_sheets_signup
 import os
 import logging
 from urllib.parse import urlparse
-from app.utils.url import detect_frontend_url
+from app.utils.urls import detect_frontend_url
 
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
