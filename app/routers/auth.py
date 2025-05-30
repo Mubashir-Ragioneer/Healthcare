@@ -26,7 +26,6 @@ from urllib.parse import urlparse
 from app.utils.url import detect_frontend_url
 
 
-
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 
 router = APIRouter(tags=["auth"])
@@ -56,7 +55,6 @@ class UserSignup(BaseModel):
     diagnosis: Literal["crohns", "colitis", "undiagnosed"]
     lead_source: str = Field("website", description="Where the user came from (e.g., 'website', 'nudii.com.br', etc.)")
 
-
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
@@ -77,7 +75,6 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
 
 
 @router.post("/signup", summary="Create a new user")
@@ -371,20 +368,20 @@ async def reset_password(req: ResetPasswordRequest):
     return {"success": True, "message": "Password reset successful. Please log in with your new password."}
 
 
-@router.patch("/me/diagnosis", summary="Set diagnosis for logged-in user")
-async def set_diagnosis(
-    diagnosis: Literal["crohns", "colitis", "undiagnosed"] = Body(...),
-    current_user: dict = Depends(get_current_user)
-):
-    user_id = current_user.get("user_id") or current_user.get("email")
-    query = {"_id": ObjectId(user_id)} if ObjectId.is_valid(user_id) else {"email": user_id}
-    result = await users_collection.update_one(
-        query,
-        {"$set": {"diagnosis": diagnosis}}
-    )
-    if result.modified_count == 1:
-        return format_response(success=True, message="Diagnosis updated")
-    raise HTTPException(status_code=400, detail="Failed to update diagnosis")
+# @router.patch("/me/diagnosis", summary="Set diagnosis for logged-in user")
+# async def set_diagnosis(
+#     diagnosis: Literal["crohns", "colitis", "undiagnosed"] = Body(...),
+#     current_user: dict = Depends(get_current_user)
+# ):
+#     user_id = current_user.get("user_id") or current_user.get("email")
+#     query = {"_id": ObjectId(user_id)} if ObjectId.is_valid(user_id) else {"email": user_id}
+#     result = await users_collection.update_one(
+#         query,
+#         {"$set": {"diagnosis": diagnosis}}
+#     )
+#     if result.modified_count == 1:
+#         return format_response(success=True, message="Diagnosis updated")
+#     raise HTTPException(status_code=400, detail="Failed to update diagnosis")
 
 @router.patch("/complete-profile", summary="Complete profile after Google login")
 async def complete_profile(
