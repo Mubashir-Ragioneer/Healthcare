@@ -585,6 +585,27 @@ async def get_specialist_session_history(
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session_id": session_id, "history": session_doc.get("queries", [])}
 
+@router.get("/all-specialist-sessions", summary="List all specialist chat sessions")
+async def list_all_specialist_sessions():
+    """
+    Returns ALL specialist chat sessions from the DB, across all users.
+    """
+    cursor = specialist_history_collection.find(
+        {},
+        {"_id": 1, "user_email": 1, "session_id": 1, "session_title": 1, "created_at": 1, "last_updated": 1}
+    ).sort("last_updated", -1)
+    sessions = await cursor.to_list(length=200)  # Adjust limit as needed
+
+    # Convert ObjectId to string and format dates
+    for session in sessions:
+        session["_id"] = str(session["_id"])
+        for field in ["created_at", "last_updated"]:
+            if session.get(field):
+                session[field] = session[field].isoformat()
+
+    return {"sessions": sessions}
+
+
 @router.delete("/delete/{conversation_id}", summary="Delete a conversation by ID")
 async def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):
     result = await conversations.delete_one({"conversation_id": conversation_id})
