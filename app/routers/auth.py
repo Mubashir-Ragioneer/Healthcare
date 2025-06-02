@@ -166,7 +166,7 @@ async def login(user: UserLogin, db: AsyncIOMotorDatabase = Depends(get_db)):
             "sub": str(existing_user["_id"]),
             "email": existing_user["email"],
             "role": existing_user.get("role", "user"),
-            "full_name": existing_user.get("full_name") or existing_user.get("name", "")
+            "name": existing_user.get("full_name") or existing_user.get("name", "")
         })
         logger.info(f"Login successful for: {user.email}")
         return {"access_token": access_token, "token_type": "bearer"}
