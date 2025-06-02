@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 import tempfile
+from pinecone import Pinecone
 import logging
 import time
 from uuid import uuid4
@@ -64,6 +65,7 @@ from app.services.google import (
     post_to_google_sheets,
     post_to_google_sheets_clinical_trial,
 )
+from app.services.vector_store import embed_text
 from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
@@ -73,6 +75,14 @@ client = OpenAI(
     api_key=settings.OPENAI_API_KEY,
     base_url=settings.OPENAI_BASE_URL,
 )
+
+PINECONE_API_KEY = settings.PINECONE_API_KEY  # Store in env
+INDEX_HOST = "https://nudii-experts-description-7iqky9x.svc.aped-4627-b74a.pinecone.io"
+NAMESPACE = "specialist"
+
+pc = Pinecone(api_key=PINECONE_API_KEY)
+pinecone_index = pc.Index(host=INDEX_HOST)
+
 UPLOAD_DIR = os.path.abspath("app/uploads")
 
 router = APIRouter(tags=["chat"])
@@ -468,6 +478,7 @@ async def get_user_conversations_by_id(user_id: str, current_user: dict = Depend
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error fetching conversations")
 
+
 @router.post(
     "/find-specialist",
     response_model=SpecialistSuggestion,
@@ -479,13 +490,14 @@ async def suggest_specialist(
     session_id: Optional[str] = Body(None, embed=True),
 ):
     """
-    Handles a specialist suggestion chat flow in a threaded session:
-    - Loads the session by session_id.
-    - Replays last N prior queries/responses to give the LLM limited context.
-    - Passes custom prompt with doctor exclusions if needed.
-    - Saves the new turn as an additional message in the session's array.
+    Suggest a specialist, with RAG-enabled context:
+    - Loads session by session_id.
+    - Gets last N turns of chat for context.
+    - Adds top Pinecone matches (specialists) for RAG.
+    - Customizes prompt with exclusions if needed.
     """
-    MAX_CONTEXT_TURNS = 5  # Only last 5 turns (user+assistant)
+    MAX_CONTEXT_TURNS = 5
+    TOP_K_RAG = 3
 
     try:
         user_email = current_user.get("email")
@@ -494,29 +506,73 @@ async def suggest_specialist(
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required for session-based specialist chat.")
 
-        # 1️⃣ Get full conversation history for this session
+        # 1️⃣ Get last N turns of chat for this session
         history = await get_full_specialist_session_history(user_email, session_id)
-        # Limit to last N turns
         if len(history) > MAX_CONTEXT_TURNS:
             history = history[-MAX_CONTEXT_TURNS:]
 
+        # --- Collect last N user queries for RAG ---
+        user_queries = [entry["query"] for entry in history if "query" in entry]
+        if user_queries:
+            combined_query = "\n".join(user_queries[-MAX_CONTEXT_TURNS:])
+            print(combined_query)
+        else:
+            combined_query = payload.query  # fallback
+
+        # 2️⃣ Pinecone RAG retrieval
+        rag_context_str = ""
+        try:
+            query_embedding = await embed_text(combined_query)
+            pinecone_results = pinecone_index.query(
+                vector=query_embedding,
+                top_k=TOP_K_RAG,
+                namespace=NAMESPACE,
+                include_metadata=True
+            )
+            matches = pinecone_results.get("matches", [])
+            matches
+            doctors = []
+            for m in matches:
+                doc_json = m['metadata'].get('doc', '{}')
+                try:
+                    doc = json.loads(doc_json)
+                    doctors.append(doc)
+                except Exception as e:
+                    print(f"Error loading doc JSON: {e}")
+            if doctors:
+                rag_context_str = "\n".join([
+                    f"""{{
+    "Name": "{doc.get('name', '')}",
+    "Specialization": "{', '.join(doc.get('medical_specialty', []))}",
+    "Registration": "{doc.get('crm', '')}",
+    "Image": "{doc.get('Image in Google Drive', 'https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png')}",
+    "doctor_description": "{doc.get('my_story', '')[:220]}"
+    }}"""
+                    for doc in doctors
+                ])
+                print(rag_context_str)
+        except Exception as pinecone_err:
+            print("🔴 Pinecone retrieval failed:", pinecone_err)
+            rag_context_str = ""
+
+        # 3️⃣ Exclusions (already recommended doctors in similar queries)
         already_recommended = set()
-        # 2️⃣ Determine doctors to exclude based on similar queries in the (limited) history
         for entry in history:
             if "query" in entry and is_similar_query(payload.query, entry["query"]):
                 already_recommended.add(entry.get("doctor_name", ""))
 
-        # 3️⃣ Build the system prompt
+        # 4️⃣ Build system prompt with RAG context and exclusions
+        custom_prompt = FIND_SPECIALIST_PROMPT
         if already_recommended:
             doctors_list = ", ".join([d for d in already_recommended if d])
-            custom_prompt = (
-                FIND_SPECIALIST_PROMPT +
-                f"\n\nNOTE: For this session ({session_id}), the user has previously been recommended the following specialist(s) for similar symptoms: {doctors_list}. If possible, suggest a different specialist from the available list."
+            custom_prompt += (
+                f"\n\nNOTE: For this session ({session_id}), the user has previously been recommended: {doctors_list}. "
+                "If possible, suggest a different specialist."
             )
-        else:
-            custom_prompt = FIND_SPECIALIST_PROMPT
+        if rag_context_str:
+            custom_prompt += f"\n\nHere are the relevant specialists (choose only from these):\n{rag_context_str}"
 
-        # 4️⃣ Construct message list for OpenAI (system, prior pairs, current user)
+        # 5️⃣ Build OpenAI message array: system, prev chat, current user
         messages = [{"role": "system", "content": custom_prompt}]
         for entry in history:
             if "query" in entry:
@@ -527,10 +583,16 @@ async def suggest_specialist(
                     messages.append({"role": "assistant", "content": resp_msg})
         messages.append({"role": "user", "content": payload.query})
 
-        # 5️⃣ Call the LLM (thread-safe)
-        raw = await asyncio.to_thread(find_specialist_response, messages)
+        # 6️⃣ LLM call (thread-safe)
+        raw = await asyncio.to_thread(
+            find_specialist_response,
+            payload.query,
+            custom_prompt,
+            rag_context_str,
+            history
+        )
 
-        # 6️⃣ Always save the turn
+        # 7️⃣ Always save turn
         await save_specialist_history(
             user_email,
             payload.query,
@@ -539,10 +601,11 @@ async def suggest_specialist(
             response=raw
         )
 
-        # 7️⃣ Return model-validated result
+        # 8️⃣ Return model-validated result
         return SpecialistSuggestion(**raw)
 
     except Exception as e:
+        import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

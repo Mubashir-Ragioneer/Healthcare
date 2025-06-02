@@ -7,6 +7,17 @@ import json
 from openai import OpenAI
 from app.core.config import settings
 from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
+from pinecone import Pinecone
+import openai
+
+OPENAI_API_KEY = settings.OPENAI_API_KEY
+PINECONE_API_KEY = settings.PINECONE_API_KEY  # Store in env
+INDEX_HOST = "https://nudii-experts-description-7iqky9x.svc.aped-4627-b74a.pinecone.io"
+NAMESPACE = "specialist"
+
+pc = Pinecone(api_key=PINECONE_API_KEY)
+pinecone_index = pc.Index(host=INDEX_HOST)
+
 
 def clean_and_parse(raw: str) -> dict:
     # Try to extract JSON first
@@ -75,7 +86,42 @@ def is_similar_query(new_query: str, old_query: str) -> bool:
     return n == o or (len(n) > 10 and n in o) or (len(o) > 10 and o in n)
 
 client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
-def find_specialist_response(messages: list) -> dict:
+
+
+def find_specialist_response(
+    user_query: str,
+    system_prompt: str = FIND_SPECIALIST_PROMPT,
+    context_str: str = "",
+    history: list = None
+) -> dict:
+    """
+    Calls OpenAI LLM for specialist recommendation.
+    Optionally injects context_str (retrieved specialist info) and conversation history.
+    - user_query: Current query string from user.
+    - system_prompt: The base prompt for the LLM.
+    - context_str: Optional context block, e.g., Pinecone RAG results.
+    - history: List of {'query':..., 'response':...} for previous turns.
+    """
+    # 1. Compose system prompt
+    system_block = system_prompt
+    if context_str:
+        system_block += f"\n\nHere are relevant doctor profiles from our database:\n{context_str}"
+
+    # 2. Compose message history for OpenAI
+    messages = [{"role": "system", "content": system_block}]
+    # Add conversation history, if provided
+    if history:
+        for entry in history:
+            if "query" in entry:
+                messages.append({"role": "user", "content": entry["query"]})
+            if "response" in entry and entry["response"]:
+                resp_msg = entry["response"].get("response_message", "")
+                if resp_msg:
+                    messages.append({"role": "assistant", "content": resp_msg})
+    # Always end with the current query
+    messages.append({"role": "user", "content": user_query})
+
+    # 3. Call OpenAI
     try:
         resp = client.chat.completions.create(
             model="gpt-4.1",
@@ -89,13 +135,13 @@ def find_specialist_response(messages: list) -> dict:
         except Exception as e:
             print("❌ Returning fallback due to JSON parse failure.")
             return {
-            "response_message": "Sorry, there was an issue processing your request.",
-            "Name": "",
-            "Specialization": "",
-            "Registration": "",
-            "Image": "https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png",
-            "doctor_description": ""
-        }
+                "response_message": "Sorry, there was an issue processing your request.",
+                "Name": "",
+                "Specialization": "",
+                "Registration": "",
+                "Image": "https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png",
+                "doctor_description": ""
+            }
 
     except Exception as e:
         print("❌ GPT call failed:", e)
@@ -104,7 +150,6 @@ def find_specialist_response(messages: list) -> dict:
             "Name": "",
             "Specialization": "",
             "Registration": "",
-            # FIX THIS LINE
             "Image": "https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png",
             "doctor_description": ""
         }
