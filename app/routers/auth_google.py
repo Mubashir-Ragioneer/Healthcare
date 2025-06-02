@@ -11,6 +11,9 @@ import logging
 from urllib.parse import urlparse, urlencode, unquote
 from app.services.google import post_to_google_sheets_signup
 from app.utils.urls import detect_frontend_url
+from datetime import datetime
+
+
 
 router = APIRouter(tags=["auth"])
 
@@ -97,7 +100,8 @@ async def auth_callback(request: Request):
                 "$setOnInsert": {
                     "provider": "google",
                     "role": "user",
-                    "lead_source": lead_source
+                    "lead_source": lead_source,
+                    "created_at": datetime.utcnow()  # <---- ADD THIS LINE
                 },
                 "$set": {
                     "email": email,
@@ -107,6 +111,7 @@ async def auth_callback(request: Request):
             },
             upsert=True
         )
+
 
         # 5. Get user, check for diagnosis
         user = await user_collection.find_one({"email": email})
