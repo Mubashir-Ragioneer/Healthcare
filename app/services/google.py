@@ -76,7 +76,7 @@ def post_to_google_sheets_signup(user_doc: dict):
         "Full Name": user_doc.get("full_name") or user_doc.get("name", ""),
         "Email": user_doc["email"],
         "Phone": user_doc.get("phone_number", ""),
-        "Diagnosis": user_doc["diagnosis"],
+        "Diagnosis": user_doc.get("diagnosis", ""),
         "Medications": "",
         "Test Results Description": "",
         "Lead Source": user_doc.get("lead_source", ""),
