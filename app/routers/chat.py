@@ -1,35 +1,70 @@
 # app/routers/chat.py
-import os, json
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Body, Depends
-from pydantic import BaseModel, Field
-from typing import Literal, List, Optional, Dict, Any
-from fastapi.responses import JSONResponse
+
+import os
+import json
+import asyncio
+import tempfile
+import logging
+import time
 from uuid import uuid4
 from datetime import datetime
-from openai import OpenAI
-from app.core.config import settings
-from app.services.kommo import push_lead_to_kommo
-from app.routers.deps import get_current_user
-from app.services.chat_engine import chat_with_assistant, conversations
-from app.db.mongo import db
+from typing import Literal, List, Optional, Dict, Any
+from fastapi import (
+    APIRouter,
+    Form,
+    File,
+    UploadFile,
+    HTTPException,
+    Body,
+    Depends,
+)
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, ValidationError
 from bson import ObjectId
-from app.db.mongo import conversation_collection
-from app.utils.responses import format_response
-from app.services.kommo import push_clinical_trial_lead
-from app.services.find_specialist_engine import find_specialist_response
-import logging
-from app.schemas.specialist import FindSpecialistRequest, SpecialistSuggestion
-import asyncio  # for async to_thread
 from openai import OpenAI
-from app.core.config import settings
-from app.services.chat_engine import chat_with_assistant_file
-from app.services.google import upload_file_to_drive, post_to_google_sheets, post_to_google_sheets_clinical_trial
-from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
 import requests
-import time
-import tempfile
-from pydantic import ValidationError  
+from app.core.config import settings
 from app.core.logger import logger
+from app.db.mongo import (
+    db,
+    conversation_collection,
+    specialist_history_collection,
+)
+from app.routers.deps import get_current_user
+from app.schemas.chat import (
+    ChatModelOutput,
+    Message,
+    ChatRequest,
+    NewChatResponse,
+    NewChatRequest,
+    ChatResponse,
+)
+from app.schemas.specialist import (
+    FindSpecialistRequest,
+    SpecialistSuggestion,
+)
+from app.services.chat_engine import (
+    chat_with_assistant,
+    conversations,
+    chat_with_assistant_file,
+)
+from app.services.find_specialist_engine import (
+    find_specialist_response,
+    get_recent_specialist_suggestions,
+    save_specialist_history,
+    is_similar_query,
+    get_full_specialist_session_history
+)
+from app.services.kommo import (
+    push_lead_to_kommo,
+    push_clinical_trial_lead,
+)
+from app.services.google import (
+    upload_file_to_drive,
+    post_to_google_sheets,
+    post_to_google_sheets_clinical_trial,
+)
+from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
@@ -433,7 +468,6 @@ async def get_user_conversations_by_id(user_id: str, current_user: dict = Depend
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error fetching conversations")
 
-
 @router.post(
     "/find-specialist",
     response_model=SpecialistSuggestion,
@@ -442,13 +476,114 @@ async def get_user_conversations_by_id(user_id: str, current_user: dict = Depend
 async def suggest_specialist(
     payload: FindSpecialistRequest,
     current_user: dict = Depends(get_current_user),
+    session_id: Optional[str] = Body(None, embed=True),
 ):
+    """
+    Handles a specialist suggestion chat flow in a threaded session:
+    - Loads the session by session_id.
+    - Replays last N prior queries/responses to give the LLM limited context.
+    - Passes custom prompt with doctor exclusions if needed.
+    - Saves the new turn as an additional message in the session's array.
+    """
+    MAX_CONTEXT_TURNS = 5  # Only last 5 turns (user+assistant)
+
     try:
-        # Use to_thread to call your sync function in async route
-        raw = await asyncio.to_thread(find_specialist_response, payload.query)
+        user_email = current_user.get("email")
+        if not user_email:
+            raise HTTPException(status_code=400, detail="User email not found in current_user")
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required for session-based specialist chat.")
+
+        # 1️⃣ Get full conversation history for this session
+        history = await get_full_specialist_session_history(user_email, session_id)
+        # Limit to last N turns
+        if len(history) > MAX_CONTEXT_TURNS:
+            history = history[-MAX_CONTEXT_TURNS:]
+
+        already_recommended = set()
+        # 2️⃣ Determine doctors to exclude based on similar queries in the (limited) history
+        for entry in history:
+            if "query" in entry and is_similar_query(payload.query, entry["query"]):
+                already_recommended.add(entry.get("doctor_name", ""))
+
+        # 3️⃣ Build the system prompt
+        if already_recommended:
+            doctors_list = ", ".join([d for d in already_recommended if d])
+            custom_prompt = (
+                FIND_SPECIALIST_PROMPT +
+                f"\n\nNOTE: For this session ({session_id}), the user has previously been recommended the following specialist(s) for similar symptoms: {doctors_list}. If possible, suggest a different specialist from the available list."
+            )
+        else:
+            custom_prompt = FIND_SPECIALIST_PROMPT
+
+        # 4️⃣ Construct message list for OpenAI (system, prior pairs, current user)
+        messages = [{"role": "system", "content": custom_prompt}]
+        for entry in history:
+            if "query" in entry:
+                messages.append({"role": "user", "content": entry["query"]})
+            if "response" in entry and entry["response"]:
+                resp_msg = entry["response"].get("response_message", "")
+                if resp_msg:
+                    messages.append({"role": "assistant", "content": resp_msg})
+        messages.append({"role": "user", "content": payload.query})
+
+        # 5️⃣ Call the LLM (thread-safe)
+        raw = await asyncio.to_thread(find_specialist_response, messages)
+
+        # 6️⃣ Always save the turn
+        await save_specialist_history(
+            user_email,
+            payload.query,
+            raw.get("Name", ""),
+            session_id=session_id,
+            response=raw
+        )
+
+        # 7️⃣ Return model-validated result
         return SpecialistSuggestion(**raw)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/new-specialist-session-by-email", summary="Create a new specialist session using email")
+async def start_new_specialist_session_by_email(
+    email: str = Body(..., embed=True)
+):
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    session_id = str(uuid4())
+    session_title = "New Specialist Session"
+
+    session_doc = {
+        "user_email": email,
+        "session_id": session_id,
+        "session_title": session_title,
+        "created_at": datetime.utcnow(),
+        "last_updated": datetime.utcnow(),
+        "queries": [],
+    }
+    await specialist_history_collection.insert_one(session_doc)
+
+    return {"session_id": session_id, "session_title": session_title}
+
+# app/routers/chat.py (your GET endpoint)
+
+@router.get("/specialist-history/{session_id}", summary="Get full specialist chat history by session")
+async def get_specialist_session_history(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    user_email = current_user.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email not found")
+    session_doc = await specialist_history_collection.find_one(
+        {"user_email": user_email, "session_id": session_id}
+    )
+    if not session_doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, "history": session_doc.get("queries", [])}
 
 @router.delete("/delete/{conversation_id}", summary="Delete a conversation by ID")
 async def delete_conversation(conversation_id: str, current_user: dict = Depends(get_current_user)):

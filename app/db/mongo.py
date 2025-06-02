@@ -18,6 +18,7 @@ url_ingestions_collection = db.get_collection("url_ingestions")
 kommo_tokens_collection = db.get_collection("kommo_tokens")
 users_collection = db.get_collection("users") 
 conversation_collection = db.get_collection("conversations")
+specialist_history_collection = db.get_collection("specialist_history")
 
 
 
