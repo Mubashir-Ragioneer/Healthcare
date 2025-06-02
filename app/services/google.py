@@ -75,7 +75,7 @@ def post_to_google_sheets_signup(user_doc: dict):
         "Timestamp": user_doc["created_at"].strftime("%m/%d/%Y %H:%M"),
         "Full Name": user_doc.get("full_name") or user_doc.get("name", ""),
         "Email": user_doc["email"],
-        "Phone": user_doc["phone_number"],
+        "Phone": user_doc.get("phone_number", ""),
         "Diagnosis": user_doc["diagnosis"],
         "Medications": "",
         "Test Results Description": "",
