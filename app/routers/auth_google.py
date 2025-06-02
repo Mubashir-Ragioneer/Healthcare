@@ -9,6 +9,8 @@ from app.core.jwt import create_jwt_token
 from app.core.config import settings, FRONTEND_URLS
 import logging
 from urllib.parse import urlparse, urlencode, unquote
+from app.services.google import post_to_google_sheets_signup
+from app.utils.urls import detect_frontend_url
 
 router = APIRouter(tags=["auth"])
 
@@ -54,7 +56,8 @@ async def login_with_google(request: Request):
 @router.get("/callback/auth", name="auth_callback")
 async def auth_callback(request: Request):
     """
-    Handles the OAuth2 callback from Google. Reads the original frontend URL from state param.
+    Handles the OAuth2 callback from Google. Reads the original frontend URL from state param,
+    and uses that both for redirect and as lead_source.
     """
     try:
         # 1. OAuth flow
@@ -69,35 +72,7 @@ async def auth_callback(request: Request):
 
         user_collection = db["users"]
 
-        # 2. Upsert user document
-        await user_collection.update_one(
-            {"email": email},
-            {
-                "$setOnInsert": {
-                    "email": email,
-                    "name": name,
-                    "picture": picture,
-                    "provider": "google",
-                    "role": "user",
-                }
-            },
-            upsert=True
-        )
-
-        # 3. Get user, check for diagnosis
-        user = await user_collection.find_one({"email": email})
-        needs_profile_completion = not bool(user.get("diagnosis"))
-
-        jwt_payload = {
-            "sub": user["email"],
-            "email": user["email"],
-            "name": user.get("name", ""),
-            "role": user.get("role", "user"),
-            "needs_profile_completion": needs_profile_completion
-        }
-        jwt_token = create_jwt_token(jwt_payload)
-
-        # 4. Parse frontend_url from state param
+        # 2. Parse frontend_url from state param
         state = request.query_params.get("state", "")
         frontend_url = FRONTEND_URLS[0]  # default
         try:
@@ -111,7 +86,50 @@ async def auth_callback(request: Request):
         except Exception as e:
             logging.warning(f"Failed to parse state param for frontend_url: {e}")
 
-        # 5. Redirect to frontend with token
+        # 3. Parse lead_source from frontend_url domain
+        parsed = urlparse(frontend_url)
+        lead_source = parsed.netloc or frontend_url.split("//")[-1].split("/")[0]
+
+        # 4. Upsert user document (update name/picture if user exists)
+        await user_collection.update_one(
+            {"email": email},
+            {
+                "$setOnInsert": {
+                    "provider": "google",
+                    "role": "user",
+                    "lead_source": lead_source
+                },
+                "$set": {
+                    "email": email,
+                    "name": name,
+                    "picture": picture
+                }
+            },
+            upsert=True
+        )
+
+        # 5. Get user, check for diagnosis
+        user = await user_collection.find_one({"email": email})
+        needs_profile_completion = not bool(user.get("diagnosis"))
+
+        # 6. Google Sheets logging (sanitize if needed)
+        try:
+            # Remove internal fields for privacy
+            user_for_sheets = {k: v for k, v in user.items() if k != "_id"}
+            post_to_google_sheets_signup(user_for_sheets)
+        except Exception as e:
+            logging.error(f"Google Sheets signup push failed for Google OAuth: {e}", exc_info=True)
+
+        # 7. JWT and redirect
+        jwt_payload = {
+            "sub": user["email"],
+            "email": user["email"],
+            "name": user.get("name", ""),
+            "role": user.get("role", "user"),
+            "needs_profile_completion": needs_profile_completion
+        }
+        jwt_token = create_jwt_token(jwt_payload)
+
         return RedirectResponse(
             url=f"{frontend_url}/login?token={jwt_token}",
             status_code=302
