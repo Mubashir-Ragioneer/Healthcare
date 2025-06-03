@@ -1,5 +1,4 @@
 # app/utils/email.py
-# app/utils/email.py
 
 import os
 from datetime import datetime

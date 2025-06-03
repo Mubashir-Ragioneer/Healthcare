@@ -21,7 +21,7 @@ def upload_file_to_drive(local_path: str, filename: str) -> str:
     if not GOOGLE_DRIVE_FOLDER_ID:
         raise ValueError("Missing GOOGLE_DRIVE_FOLDER_ID")
 
-    # ✅ Load credentials using shared helper
+    # Load credentials using shared helper
     creds = get_gcp_credentials(GOOGLE_DRIVE_SCOPES)
     drive_service = build("drive", "v3", credentials=creds)
 
@@ -47,7 +47,7 @@ def upload_file_to_drive(local_path: str, filename: str) -> str:
     ).execute()
 
     public_url = f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
-    logger.info(f"✅ Uploaded to Google Drive: {public_url}")
+    logger.info(f"Uploaded to Google Drive: {public_url}")
     return public_url
 
 
@@ -56,18 +56,18 @@ def post_to_google_sheets(form_data: dict):
     Sends the submitted form data to a Google Sheets webhook URL.
     """
     if not GOOGLE_SHEETS_WEBHOOK_URL:
-        logger.warning("⚠️ Sheets webhook not configured")
+        logger.warning("Sheets webhook not configured")
         return
 
     try:
         response = requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=form_data)
 
         if response.ok:
-            logger.info("✅ Data posted to Google Sheets")
+            logger.info("Data posted to Google Sheets")
         else:
-            logger.error(f"❌ Failed to send data to Google Sheets: {response.text}")
+            logger.error(f"Failed to send data to Google Sheets: {response.text}")
     except Exception as e:
-        logger.exception(f"❌ Exception while posting to Sheets: {e}")
+        logger.exception(f"Exception while posting to Sheets: {e}")
 
 def post_to_google_sheets_signup(user_doc: dict):
 

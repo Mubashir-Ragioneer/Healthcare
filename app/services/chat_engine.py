@@ -246,12 +246,12 @@ async def chat_with_assistant_file(
             max_tokens=cfg["max_tokens"]
         )
     except Exception as e:
-        print("❌ OpenAI API error:", str(e))
+        print("OpenAI API error:", str(e))
         raise RuntimeError("LLM call failed")
 
     reply_raw = response.choices[0].message.content
-    print("🪵 Raw LLM response:", repr(reply_raw))
-    logging.info("🪵 Raw LLM response: %s", repr(reply_raw))
+    print("Raw LLM response:", repr(reply_raw))
+    logging.info("Raw LLM response: %s", repr(reply_raw))
 
     try:
         parsed = json.loads(reply_raw)
@@ -260,7 +260,7 @@ async def chat_with_assistant_file(
         reply = parsed["reply"]
         chat_title = parsed.get("chat_title", "New Conversation")
     except Exception as e:
-        print("❌ Failed to parse JSON:", str(e))
+        print("Failed to parse JSON:", str(e))
         raise RuntimeError("Invalid JSON from LLM")
 
     # 8. Log to DB

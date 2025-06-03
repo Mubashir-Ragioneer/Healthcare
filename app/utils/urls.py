@@ -1,4 +1,5 @@
 # app/utils/url.py
+
 from typing import Optional
 from fastapi import Request
 from app.core.config import FRONTEND_URLS

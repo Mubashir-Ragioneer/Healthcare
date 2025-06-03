@@ -14,10 +14,10 @@ SUBDOMAIN = "imf"
 
 def load_kommo_token():
     if not os.path.exists(KOMMO_TOKEN_FILE):
-        print("⚠️ Kommo token file not found.")
+        print("Kommo token file not found.")
         return None
     with open(KOMMO_TOKEN_FILE, "r") as f:
-        print("📥 Loading Kommo token from file...")
+        print("Loading Kommo token from file...")
         return json.load(f)
 
 
@@ -35,7 +35,7 @@ def push_appointment_to_kommo(appointment: dict):
         "Content-Type": "application/json",
     }
 
-    # ✅ Parse dates
+    # Parse dates
     dt_str = appointment.get("datetime")
     if not dt_str:
         raise ValueError("Missing 'datetime' in appointment payload.")
@@ -43,7 +43,7 @@ def push_appointment_to_kommo(appointment: dict):
 
     name = appointment.get("patient_name", "Unknown Patient").strip()
 
-    # ✅ 1. Create Contact
+    # 1. Create Contact
     contact_payload = [{
         "first_name": name,
         "custom_fields_values": [
@@ -53,13 +53,13 @@ def push_appointment_to_kommo(appointment: dict):
     }]
     contact_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/contacts", headers=headers, json=contact_payload)
     if not contact_res.ok:
-        print(f"❌ Contact creation failed: {contact_res.status_code}")
+        print(f"Contact creation failed: {contact_res.status_code}")
         print(contact_res.text)
         raise Exception("Contact creation failed")
 
     contact_id = contact_res.json()['_embedded']['contacts'][0]['id']
 
-    # ✅ 2. Create Lead
+    # 2. Create Lead
     lead_payload = [{
         "name": f"Appointment - {name}",
         "price": 0,
@@ -91,11 +91,11 @@ def push_appointment_to_kommo(appointment: dict):
 
     lead_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
     if lead_res.status_code in [200, 201]:
-        print("✅ Appointment pushed as Kommo Lead successfully!")
+        print("Appointment pushed as Kommo Lead successfully!")
         print(lead_res.json())
-        return True  # ✅ NEW: indicate success to caller
+        return True  # NEW: indicate success to caller
     else:
-        print(f"❌ Lead creation failed: {lead_res.status_code}")
+        print(f"Lead creation failed: {lead_res.status_code}")
         print(lead_res.text)
         raise Exception("Kommo lead creation failed")
 
@@ -133,7 +133,7 @@ def push_lead_to_kommo(data: dict):
 
     lead_res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
     if lead_res.status_code not in [200, 201]:
-        print("❌ Kommo Lead failed:", lead_res.text)
+        print("Kommo Lead failed:", lead_res.text)
         raise Exception("Kommo lead creation failed")
 
     return True
@@ -186,24 +186,24 @@ async def push_clinical_trial_lead(data: dict):
     )
 
     if lead_res.status_code not in [200, 201]:
-        print("❌ Kommo Clinical Trial Lead failed:", lead_res.text)
+        print("Kommo Clinical Trial Lead failed:", lead_res.text)
         raise Exception("Clinical Trial lead creation failed")
 
-    print("✅ Kommo Clinical Trial Lead submitted.")
+    print("Kommo Clinical Trial Lead submitted.")
 
 def post_to_google_sheets(form_data: dict):
     SHEETS_WEBHOOK_URL = os.getenv("GOOGLE_SHEETS_WEBHOOK_URL")
 
     if not SHEETS_WEBHOOK_URL:
-        print("⚠️ Sheets webhook not configured")
+        print("Sheets webhook not configured")
         return
 
     try:
         response = requests.post(SHEETS_WEBHOOK_URL, json=form_data)
         if not response.ok:
-            print("❌ Failed to send data to Google Sheets:", response.text)
+            print("Failed to send data to Google Sheets:", response.text)
     except Exception as e:
-        print("❌ Exception while posting to Sheets:", str(e))
+        print("Exception while posting to Sheets:", str(e))
 
 
 
@@ -255,17 +255,17 @@ def push_exam_lead_to_kommo(data: dict):
 
     res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
     if res.status_code not in [200, 201]:
-        print("❌ Kommo exam lead creation failed:", res.text)
+        print("Kommo exam lead creation failed:", res.text)
         raise Exception("Failed to create Kommo exam lead")
-    print("✅ Kommo Exam Lead submitted.")
+    print("Kommo Exam Lead submitted.")
 
 
 def load_kommo_token():
     if not os.path.exists(KOMMO_TOKEN_FILE):
-        print("⚠️ Kommo token file not found.")
+        print("Kommo token file not found.")
         return None
     with open(KOMMO_TOKEN_FILE, "r") as f:
-        print("📥 Loading Kommo token from file...")
+        print("Loading Kommo token from file...")
         return json.load(f)
 
 def push_receptionist_request_to_kommo(data: dict):
@@ -299,10 +299,10 @@ def push_receptionist_request_to_kommo(data: dict):
 
     res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
     if res.status_code not in [200, 201]:
-        print("❌ Kommo receptionist lead failed:", res.text)
+        print("Kommo receptionist lead failed:", res.text)
         raise Exception("Failed to create Kommo receptionist lead")
 
-    print("✅ Kommo Receptionist Lead submitted.")
+    print("Kommo Receptionist Lead submitted.")
 
 def push_quote_to_kommo(data: dict):
     kommo_auth = load_kommo_token()
@@ -336,6 +336,6 @@ def push_quote_to_kommo(data: dict):
 
     res = requests.post(f"https://{SUBDOMAIN}.kommo.com/api/v4/leads", headers=headers, json=lead_payload)
     if res.status_code not in [200, 201]:
-        print("❌ Kommo quotation lead creation failed:", res.text)
+        print("Kommo quotation lead creation failed:", res.text)
         raise Exception("Failed to create Kommo quotation lead")
-    print("✅ Kommo Quotation Lead submitted.")
+    print("Kommo Quotation Lead submitted.")

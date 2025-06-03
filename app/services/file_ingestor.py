@@ -184,7 +184,7 @@ async def process_file(file: UploadFile, user_id: str) -> dict:
         }
 
         result = await documents.insert_one(doc_record)
-        logger.info(f"✅ Inserted document {result.inserted_id} into MongoDB (documents)")
+        logger.info(f"Inserted document {result.inserted_id} into MongoDB (documents)")
 
         asyncio.create_task(upsert_to_pinecone(str(result.inserted_id), text))
 
@@ -202,10 +202,10 @@ async def process_file(file: UploadFile, user_id: str) -> dict:
 
 async def process_url(url: str, user_id: str) -> dict:
     try:
-        logger.info(f"🔍 Scraping URL: {url}")
+        logger.info(f"Scraping URL: {url}")
         response = firecrawl.scrape_url(url=url, formats=["markdown"])
         content = response.markdown
-        logger.info(f"✅ Scraped content ({len(content)} chars) from URL")
+        logger.info(f"Scraped content ({len(content)} chars) from URL")
 
         doc_record = {
             "source": url,
@@ -217,7 +217,7 @@ async def process_url(url: str, user_id: str) -> dict:
         }
 
         result = await urls.insert_one(doc_record)
-        logger.info(f"✅ Inserted URL {result.inserted_id} into MongoDB (urls)")
+        logger.info(f"Inserted URL {result.inserted_id} into MongoDB (urls)")
 
         # asyncio.create_task(upsert_to_pinecone(str(result.inserted_id), content))
 

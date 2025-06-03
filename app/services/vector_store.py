@@ -14,7 +14,7 @@ client = OpenAI(
 )
 executor = ThreadPoolExecutor()
 
-# 🔧 Generate embedding asynchronously using a thread pool
+# Generate embedding asynchronously using a thread pool
 async def embed_text(text: str) -> List[float]:
     loop = asyncio.get_event_loop()
     res = await loop.run_in_executor(executor, lambda: client.embeddings.create(
@@ -23,7 +23,7 @@ async def embed_text(text: str) -> List[float]:
     ))
     return res.data[0].embedding
 
-# 🧩 Chunking utility
+# Chunking utility
 def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]:
     chunks = []
     start = 0
@@ -33,7 +33,7 @@ def chunk_text(text: str, chunk_size: int = 400, overlap: int = 50) -> List[str]
         start += chunk_size - overlap
     return chunks
 
-# 🚀 Upsert chunks with embeddings to Pinecone
+# Upsert chunks with embeddings to Pinecone
 async def upsert_to_pinecone(doc_id: str, text: str) -> int:
     chunks = chunk_text(text)
     embeddings = await asyncio.gather(*[embed_text(chunk) for chunk in chunks])
@@ -51,5 +51,5 @@ async def upsert_to_pinecone(doc_id: str, text: str) -> int:
     ]
 
     index.upsert(vectors)
-    print(f"📌 Upserted {len(vectors)} chunks to Pinecone for doc_id: {doc_id}")
+    print(f"Upserted {len(vectors)} chunks to Pinecone for doc_id: {doc_id}")
     return len(vectors)

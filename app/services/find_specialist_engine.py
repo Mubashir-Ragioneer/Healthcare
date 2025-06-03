@@ -27,9 +27,9 @@ def clean_and_parse(raw: str) -> dict:
         try:
             return json.loads(json_str)
         except Exception as e:
-            print("❌ JSON in markdown but failed to parse:", e)
+            print("JSON in markdown but failed to parse:", e)
     # If not JSON, treat as text advice and wrap in expected JSON schema
-    print("ℹ️ Received non-JSON, wrapping as fallback JSON.")
+    print("Received non-JSON, wrapping as fallback JSON.")
     return {
         "response_message": raw.strip(),
         "Name": "",
@@ -133,7 +133,7 @@ def find_specialist_response(
         try:
             return clean_and_parse(raw)
         except Exception as e:
-            print("❌ Returning fallback due to JSON parse failure.")
+            print("Returning fallback due to JSON parse failure.")
             return {
                 "response_message": "Sorry, there was an issue processing your request.",
                 "Name": "",
@@ -144,7 +144,7 @@ def find_specialist_response(
             }
 
     except Exception as e:
-        print("❌ GPT call failed:", e)
+        print("GPT call failed:", e)
         return {
             "response_message": "Sorry, there was an issue processing your request.",
             "Name": "",
