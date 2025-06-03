@@ -8,7 +8,7 @@ from app.routers.deps import require_admin
 from app.services.file_ingestor import process_file
 from app.db.mongo import documents_collection
 from app.routers.deps import get_current_user
-from app.utils.responses import format_response  # ✅ standardized responses
+from app.utils.responses import format_response  # standardized responses
 
 router = APIRouter(tags=["documents"])
 

@@ -12,7 +12,7 @@ from app.db.mongo import users_collection
 from app.services.kommo import push_appointment_to_kommo
 from app.services.feegow import forward_to_feegow
 from app.routers.deps import require_admin
-from app.utils.responses import format_response  # ✅ uniform response wrapper
+from app.utils.responses import format_response  # uniform response wrapper
 from app.models.user import UserCreate
 from passlib.context import CryptContext
 from app.routers.deps import get_current_user
@@ -100,13 +100,13 @@ async def resync_appointment(
         await forward_to_feegow(rec)
         feegow_synced = True
     except Exception as e:
-        print(f"❌ Feegow resync failed: {e}")
+        print(f"Feegow resync failed: {e}")
 
     try:
         await push_appointment_to_kommo(rec)
         kommo_synced = True
     except Exception as e:
-        print(f"❌ Kommo resync failed: {e}")
+        print(f"Kommo resync failed: {e}")
 
     await appointments_collection.update_one(
         {"id": appointment_id},
@@ -142,7 +142,7 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
             {"email": user.email},
             {"$set": {"role": "admin"}}
         )
-        return {"message": f"✅ User '{user.email}' promoted to admin"}
+        return {"message": f"User '{user.email}' promoted to admin"}
     
     hashed_password = pwd_context.hash(user.password)
     await users_collection.insert_one({
@@ -150,7 +150,7 @@ async def create_admin(user: UserCreate, current_user: dict = Depends(require_ad
         "password": hashed_password,
         "role": "admin"
     })
-    return {"message": f"✅ Admin user '{user.email}' created successfully"}
+    return {"message": f"Admin user '{user.email}' created successfully"}
 
 
 @router.get("/all-users", summary="Get all users (admins and regular users)")

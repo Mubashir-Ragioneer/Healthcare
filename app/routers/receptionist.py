@@ -24,7 +24,7 @@ async def connect_receptionist(req: ReceptionRequest):
     # Push to Kommo
     push_receptionist_request_to_kommo(doc)
 
-    return {"message": "✅ Request received. Our agent will call you shortly."}
+    return {"message": "Request received. Our agent will call you shortly."}
 
 @router.get("/request", response_model=List[ReceptionRequest])
 async def list_receptionist_requests(user_id: str):

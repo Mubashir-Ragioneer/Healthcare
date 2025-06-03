@@ -7,7 +7,7 @@ from bson import ObjectId
 from app.core.config import settings
 from app.db.pinecone import index
 from app.routers.deps import get_current_user
-from app.utils.responses import format_response  # ✅ standardized response
+from app.utils.responses import format_response  # standardized response
 from app.utils.pagination import build_pagination, build_sort
 
 router = APIRouter(prefix="/documents", tags=["documents"])

@@ -24,9 +24,9 @@ async def request_quote(req: QuoteRequest):
     try:
         push_quote_to_kommo(doc)
     except Exception as e:
-        print("⚠️ Kommo push failed:", str(e))
+        print("Kommo push failed:", str(e))
 
-    return {"message": "✅ Quotation request submitted."}
+    return {"message": "Quotation request submitted."}
     
 @router.get("/request", response_model=List[QuoteRequest])
 async def list_quote_requests(user_id: str):

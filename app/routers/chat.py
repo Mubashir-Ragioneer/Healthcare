@@ -99,18 +99,18 @@ async def chat_endpoint(
     request: ChatRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    # 1️⃣ Validate input
+    # 1️ Validate input
     if not request.messages:
         raise HTTPException(status_code=400, detail="At least one message must be provided.")
 
-    # 2️⃣ Ensure we have a conversation_id (new or existing)
+    # 2️ Ensure we have a conversation_id (new or existing)
     conv_id = request.conversation_id or str(uuid4())
 
-    # 3️⃣ Prepare the payload
+    # 3️ Prepare the payload
     msgs = [msg.dict() for msg in request.messages]
 
     try:
-        # 4️⃣ Call the service
+        # 4️ Call the service
         result = await chat_with_assistant(
             messages=msgs,
             user_id=request.user_id,
@@ -133,7 +133,7 @@ async def chat_endpoint(
             detail="Internal server error"
         )
 
-    # 5️⃣ Return the reply, title—and the conversation_id so the frontend can thread future requests.
+    # 5️ Return the reply, title—and the conversation_id so the frontend can thread future requests.
     return ChatResponse(
         reply=result["reply"],
         chat_title=result["chat_title"],
@@ -372,7 +372,7 @@ async def get_chat_history(conversation_id: str, current_user: dict = Depends(ge
         return JSONResponse(content=convo)
 
     except Exception as e:
-        print("❌ Error in get_chat_history():", str(e))
+        print(" Error in get_chat_history():", str(e))
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Server error while retrieving chat history")
@@ -395,7 +395,7 @@ async def submit_clinical_trial(
         file_path = None
         google_drive_link = None
 
-        # ✅ Save locally and upload to Drive
+        # Save locally and upload to Drive
         if test_results_file:
             ext = test_results_file.filename.split(".")[-1]
             local_filename = f"{uuid4()}.{ext}"
@@ -405,9 +405,9 @@ async def submit_clinical_trial(
                 f.write(await test_results_file.read())
 
             google_drive_link = upload_file_to_drive(file_path, test_results_file.filename)
-            logger.info("✅ File uploaded to Google Drive: %s", google_drive_link)
+            logger.info("File uploaded to Google Drive: %s", google_drive_link)
 
-        # 📦 Prepare form data
+        # Prepare form data
         # Get lead_source from current user (or fetch from DB)
         lead_source = current_user.get("lead_source")
         if not lead_source:
@@ -423,19 +423,19 @@ async def submit_clinical_trial(
             "google_drive_link": google_drive_link
         }
 
-        # 💾 Store in MongoDB
+        # Store in MongoDB
         await db["clinical_trial_uploads"].insert_one({
             **form_data,
             "submitted_at": datetime.utcnow()
         })
         logger.info("💾 Data saved to MongoDB for %s", email)
 
-        # # 🔁 External integrations
+        #  External integrations
         # await push_clinical_trial_lead({**form_data, "uploaded_file_path": file_path})
-        logger.info("📤 Pushed to Kommo")
+        logger.info(" Pushed to Kommo")
 
         post_to_google_sheets_clinical_trial(form_data)
-        logger.info("✅ Posted to Google Sheets")
+        logger.info(" Posted to Google Sheets")
 
         # 🧹 Clean up temp file
         if file_path and os.path.exists(file_path):
@@ -448,7 +448,7 @@ async def submit_clinical_trial(
         }
 
     except Exception as e:
-        logger.exception("❌ Error in /clinical-trial")
+        logger.exception(" Error in /clinical-trial")
         raise HTTPException(status_code=500, detail=f"Submission failed: {str(e)}")
 
 @router.get("/conversations/{user_id}", summary="Get all conversations by user_id (email)")
@@ -506,7 +506,7 @@ async def suggest_specialist(
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required for session-based specialist chat.")
 
-        # 1️⃣ Get last N turns of chat for this session
+        # 1️ Get last N turns of chat for this session
         history = await get_full_specialist_session_history(user_email, session_id)
         if len(history) > MAX_CONTEXT_TURNS:
             history = history[-MAX_CONTEXT_TURNS:]
@@ -519,7 +519,7 @@ async def suggest_specialist(
         else:
             combined_query = payload.query  # fallback
 
-        # 2️⃣ Pinecone RAG retrieval
+        # 2️ Pinecone RAG retrieval
         rag_context_str = ""
         try:
             query_embedding = await embed_text(combined_query)
@@ -552,16 +552,16 @@ async def suggest_specialist(
                 ])
                 print(rag_context_str)
         except Exception as pinecone_err:
-            print("🔴 Pinecone retrieval failed:", pinecone_err)
+            print(" Pinecone retrieval failed:", pinecone_err)
             rag_context_str = ""
 
-        # 3️⃣ Exclusions (already recommended doctors in similar queries)
+        # 3️ Exclusions (already recommended doctors in similar queries)
         already_recommended = set()
         for entry in history:
             if "query" in entry and is_similar_query(payload.query, entry["query"]):
                 already_recommended.add(entry.get("doctor_name", ""))
 
-        # 4️⃣ Build system prompt with RAG context and exclusions
+        # 4️ Build system prompt with RAG context and exclusions
         custom_prompt = FIND_SPECIALIST_PROMPT
         if already_recommended:
             doctors_list = ", ".join([d for d in already_recommended if d])
@@ -572,7 +572,7 @@ async def suggest_specialist(
         if rag_context_str:
             custom_prompt += f"\n\nHere are the relevant specialists (choose only from these):\n{rag_context_str}"
 
-        # 5️⃣ Build OpenAI message array: system, prev chat, current user
+        # 5️ Build OpenAI message array: system, prev chat, current user
         messages = [{"role": "system", "content": custom_prompt}]
         for entry in history:
             if "query" in entry:
@@ -583,7 +583,7 @@ async def suggest_specialist(
                     messages.append({"role": "assistant", "content": resp_msg})
         messages.append({"role": "user", "content": payload.query})
 
-        # 6️⃣ LLM call (thread-safe)
+        # 6️ LLM call (thread-safe)
         raw = await asyncio.to_thread(
             find_specialist_response,
             payload.query,
@@ -592,7 +592,7 @@ async def suggest_specialist(
             history
         )
 
-        # 7️⃣ Always save turn
+        # 7️ Always save turn
         await save_specialist_history(
             user_email,
             payload.query,
@@ -601,7 +601,7 @@ async def suggest_specialist(
             response=raw
         )
 
-        # 8️⃣ Return model-validated result
+        # 8️ Return model-validated result
         return SpecialistSuggestion(**raw)
 
     except Exception as e:
@@ -674,4 +674,4 @@ async def delete_conversation(conversation_id: str, current_user: dict = Depends
     result = await conversations.delete_one({"conversation_id": conversation_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"success": True, "message": "🗑️ Conversation deleted successfully"}
+    return {"success": True, "message": " Conversation deleted successfully"}
