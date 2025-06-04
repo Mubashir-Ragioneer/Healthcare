@@ -478,10 +478,9 @@ async def get_user_conversations_by_id(user_id: str, current_user: dict = Depend
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error fetching conversations")
 
-
 @router.post(
     "/find-specialist",
-    response_model=SpecialistSuggestion,
+    response_model=Dict[str, Any],  # Accepts both single/multi structures
     summary="Suggest a specialist based on user query"
 )
 async def suggest_specialist(
@@ -489,15 +488,8 @@ async def suggest_specialist(
     current_user: dict = Depends(get_current_user),
     session_id: Optional[str] = Body(None, embed=True),
 ):
-    """
-    Suggest a specialist, with RAG-enabled context:
-    - Loads session by session_id.
-    - Gets last N turns of chat for context.
-    - Adds top Pinecone matches (specialists) for RAG.
-    - Customizes prompt with exclusions if needed.
-    """
-    MAX_CONTEXT_TURNS = 5
-    TOP_K_RAG = 3
+    MAX_CONTEXT_TURNS = 3
+    TOP_K_RAG = 8
 
     try:
         user_email = current_user.get("email")
@@ -511,16 +503,12 @@ async def suggest_specialist(
         if len(history) > MAX_CONTEXT_TURNS:
             history = history[-MAX_CONTEXT_TURNS:]
 
-        # --- Collect last N user queries for RAG ---
+        # 2️ Collect last N user queries for RAG
         user_queries = [entry["query"] for entry in history if "query" in entry]
-        if user_queries:
-            combined_query = "\n".join(user_queries[-MAX_CONTEXT_TURNS:])
-            print(combined_query)
-        else:
-            combined_query = payload.query  # fallback
-
-        # 2️ Pinecone RAG retrieval
-        rag_context_str = ""
+        combined_query = "\n".join(user_queries[-MAX_CONTEXT_TURNS:]) if user_queries else payload.query
+        #logger.info("Combined query: %s", combined_query)
+        # 3️ Pinecone RAG retrieval
+        doctors = []
         try:
             query_embedding = await embed_text(combined_query)
             pinecone_results = pinecone_index.query(
@@ -529,51 +517,48 @@ async def suggest_specialist(
                 namespace=NAMESPACE,
                 include_metadata=True
             )
-            matches = pinecone_results.get("matches", [])
-            matches
-            doctors = []
-            for m in matches:
+            for m in pinecone_results.get("matches", []):
                 doc_json = m['metadata'].get('doc', '{}')
                 try:
                     doc = json.loads(doc_json)
                     doctors.append(doc)
                 except Exception as e:
                     print(f"Error loading doc JSON: {e}")
-            if doctors:
-                rag_context_str = "\n".join([
-                    f"""{{
+        except Exception as pinecone_err:
+            print("Pinecone retrieval failed:", pinecone_err)
+
+        # 4️ Format the RAG block as strict JSON per profile
+        rag_context_str = ""
+        if doctors:
+            rag_context_str = "\n".join([
+                f"""{{
     "Name": "{doc.get('name', '')}",
-    "Specialization": "{', '.join(doc.get('medical_specialty', []))}",
+    "Specialization": "{(
+        ', '.join(doc.get('medical_specialty', [])) or
+        ', '.join(doc.get('specialty', [])) or
+        doc.get('specialization', '') or
+        ''
+    )}",
     "Registration": "{doc.get('crm', '')}",
     "Image": "{doc.get('Image in Google Drive', 'https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png')}",
-    "doctor_description": "{doc.get('my_story', '')[:220]}"
+    "doctor_description": "{doc.get('my_story', '')[:1000]}"
     }}"""
-                    for doc in doctors
-                ])
-                print(rag_context_str)
-        except Exception as pinecone_err:
-            print(" Pinecone retrieval failed:", pinecone_err)
-            rag_context_str = ""
+                for doc in doctors
+            ])
+            #logger.info("RAG context: %s", rag_context_str)
 
-        # 3️ Exclusions (already recommended doctors in similar queries)
-        already_recommended = set()
-        for entry in history:
-            if "query" in entry and is_similar_query(payload.query, entry["query"]):
-                already_recommended.add(entry.get("doctor_name", ""))
-
-        # 4️ Build system prompt with RAG context and exclusions
-        custom_prompt = FIND_SPECIALIST_PROMPT
-        if already_recommended:
-            doctors_list = ", ".join([d for d in already_recommended if d])
-            custom_prompt += (
-                f"\n\nNOTE: For this session ({session_id}), the user has previously been recommended: {doctors_list}. "
-                "If possible, suggest a different specialist."
-            )
+        # 5️ Compose the system prompt: RAG context FIRST, then instructions
         if rag_context_str:
-            custom_prompt += f"\n\nHere are the relevant specialists (choose only from these):\n{rag_context_str}"
+            system_prompt = (
+                "Here are the relevant specialist profiles (choose only from these):\n"
+                f"{rag_context_str}\n\n"
+                f"{FIND_SPECIALIST_PROMPT.strip()}"
+            )
+        else:
+            system_prompt = FIND_SPECIALIST_PROMPT.strip()
 
-        # 5️ Build OpenAI message array: system, prev chat, current user
-        messages = [{"role": "system", "content": custom_prompt}]
+        # 6️ Build OpenAI message array
+        messages = [{"role": "system", "content": system_prompt}]
         for entry in history:
             if "query" in entry:
                 messages.append({"role": "user", "content": entry["query"]})
@@ -583,31 +568,36 @@ async def suggest_specialist(
                     messages.append({"role": "assistant", "content": resp_msg})
         messages.append({"role": "user", "content": payload.query})
 
-        # 6️ LLM call (thread-safe)
+        # 7️ LLM call (thread-safe)
         raw = await asyncio.to_thread(
             find_specialist_response,
             payload.query,
-            custom_prompt,
+            system_prompt,
             rag_context_str,
             history
         )
 
-        # 7️ Always save turn
+        # 8️ Save all recommended doctor names for history
+        doctor_names = []
+        if isinstance(raw, dict):
+            if "specialists" in raw and isinstance(raw["specialists"], list):
+                doctor_names = [d.get("Name", "") for d in raw["specialists"]]
+            elif "Name" in raw:
+                doctor_names = [raw.get("Name", "")]
         await save_specialist_history(
             user_email,
             payload.query,
-            raw.get("Name", ""),
+            ", ".join([name for name in doctor_names if name]),
             session_id=session_id,
             response=raw
         )
 
-        # 8️ Return model-validated result
-        return SpecialistSuggestion(**raw)
+        # 9️ Return result directly
+        return raw
 
     except Exception as e:
         import traceback; traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/new-specialist-session-by-email", summary="Create a new specialist session using email")
 async def start_new_specialist_session_by_email(

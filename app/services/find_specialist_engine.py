@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
 from pinecone import Pinecone
 import openai
+from app.core.logger import logger
 
 OPENAI_API_KEY = settings.OPENAI_API_KEY
 PINECONE_API_KEY = settings.PINECONE_API_KEY  # Store in env
@@ -20,15 +21,20 @@ pinecone_index = pc.Index(host=INDEX_HOST)
 
 
 def clean_and_parse(raw: str) -> dict:
-    # Try to extract JSON first
     match = re.search(r"\{[\s\S]*\}", raw)
     if match:
         json_str = match.group(0)
         try:
-            return json.loads(json_str)
+            parsed = json.loads(json_str)
+            # Accept either single specialist or multiple
+            if "specialists" in parsed and isinstance(parsed["specialists"], list):
+                return parsed
+            # Accept flat/single result
+            elif all(k in parsed for k in ["response_message", "Name", "Specialization", "Registration", "Image", "doctor_description"]):
+                return parsed
         except Exception as e:
             print("JSON in markdown but failed to parse:", e)
-    # If not JSON, treat as text advice and wrap in expected JSON schema
+    # Fallback for plain text
     print("Received non-JSON, wrapping as fallback JSON.")
     return {
         "response_message": raw.strip(),
@@ -120,6 +126,7 @@ def find_specialist_response(
                     messages.append({"role": "assistant", "content": resp_msg})
     # Always end with the current query
     messages.append({"role": "user", "content": user_query})
+    #logger.info(messages)
 
     # 3. Call OpenAI
     try:
