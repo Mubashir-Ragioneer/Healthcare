@@ -488,7 +488,7 @@ async def suggest_specialist(
     current_user: dict = Depends(get_current_user),
     session_id: Optional[str] = Body(None, embed=True),
 ):
-    MAX_CONTEXT_TURNS = 3
+    MAX_CONTEXT_TURNS = 1
     TOP_K_RAG = 8
 
     try:

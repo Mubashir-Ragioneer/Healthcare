@@ -50,13 +50,18 @@ You are a medical AI assistant. You will receive a health-related question from 
 - **Single match:**
 ```json
 {
-  "response_message": "Based on your symptoms, Dr. Jane Doe is the best match for you because she specializes in gastroenterology and has extensive experience treating similar cases.",
-  "Name": "Dr. Jane Doe",
-  "Specialization": "Gastroenterology",
-  "Registration": "CRM-12345",
-  "Image": "https://nudii.com.br/wp-content/uploads/2025/05/Jane-Doe.webp",
-  "doctor_description": "Dr. Jane Doe is a highly regarded gastroenterologist known for her patient-centered care and expertise in digestive health."
+  "specialists": [
+    {
+      "response_message": "Based on your symptoms, Dr. Jane Doe is the best match for you because she specializes in gastroenterology and has extensive experience treating similar cases.",
+      "Name": "Dr. Jane Doe",
+      "Specialization": "Gastroenterology",
+      "Registration": "CRM-12345",
+      "Image": "https://nudii.com.br/wp-content/uploads/2025/05/Jane-Doe.webp",
+      "doctor_description": "Dr. Jane Doe is a highly regarded gastroenterologist known for her patient-centered care and expertise in digestive health."
+    }
+  ]
 }
+
 - **Multiple Matches:**
 ```json
 {
@@ -82,11 +87,15 @@ You are a medical AI assistant. You will receive a health-related question from 
 - **No match or non-health question:**
 ```json
 {
-  "response_message": "Sorry, I can only answer questions related to health or medical specialists. Please ask a medical question.",
-  "Name": "",
-  "Specialization": "",
-  "Registration": "",
-  "Image": "https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png",
-  "doctor_description": ""
+  "specialists": [
+    {
+      "response_message": "Sorry, I can only answer questions related to health or medical specialists. Please ask a medical question.",
+      "Name": "",
+      "Specialization": "",
+      "Registration": "",
+      "Image": "https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png",
+      "doctor_description": ""
+    }
+  ]
 }
 """
