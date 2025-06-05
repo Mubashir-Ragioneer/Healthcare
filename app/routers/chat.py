@@ -48,6 +48,7 @@ from app.services.chat_engine import (
     chat_with_assistant,
     conversations,
     chat_with_image_assistant,
+    process_and_log_image_chat_message
 )
 from app.services.find_specialist_engine import (
     find_specialist_response,
@@ -67,6 +68,7 @@ from app.services.google import (
 )
 from app.services.vector_store import embed_text
 from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
+from fastapi import BackgroundTasks
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
@@ -140,28 +142,65 @@ async def chat_endpoint(
         conversation_id=conv_id
     )
 
-@router.post(
-    "/with-image",
-    summary="Send an image and receive an LLM-powered reply"
-)
+@router.post("/chat/with-image")
 async def chat_with_image(
+    background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
     user_id: str = Form(...),
     conversation_id: str = Form(None),
-    prompt: str = Form("What’s in this image?"),
+    prompt: str = Form("What's in this image?"),
     current_user: dict = Depends(get_current_user)
 ):
-    """
-    Accepts an image, optional prompt, and returns the model's response.
-    """
-    result = await chat_with_image_assistant(
-        image,
-        user_id,
-        conversation_id,
-        text_prompt=prompt
+    # 1. Read image to memory (don't save to disk yet!)
+    image_bytes = await image.read()
+
+    # 2. Base64 encode for LLM
+    import base64, os
+    ext = image.filename.split('.')[-1]
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+
+    # 3. Compose OpenAI message
+    llm_messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/{ext};base64,{base64_image}"
+                }
+            }
+        ]
+    }]
+
+    # 4. Get LLM reply
+    from app.core.config import settings
+    from openai import OpenAI
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
+    completion = client.chat.completions.create(
+        model="gpt-4.1",  # Or gpt-4o
+        messages=llm_messages,
+        max_tokens=400
+    )
+    reply = completion.choices[0].message.content
+    conv_id = conversation_id or str(uuid4())
+
+    # 5. Return the response immediately!
+    response_obj = {
+        "reply": reply,
+        "chat_title": "Image Analysis",
+        "conversation_id": conv_id
+    }
+
+    # 6. Start background upload + DB logging
+    background_tasks.add_task(
+        process_and_log_image_chat_message,
+        image_bytes, ext, image.filename, prompt, user_id, conv_id, reply
     )
 
-    return result
+    return response_obj
+
+
 
 @router.post("/with-audio", summary="Send audio and receive a reply")
 async def chat_with_audio(

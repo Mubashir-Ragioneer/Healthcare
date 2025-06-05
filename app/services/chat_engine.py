@@ -14,7 +14,7 @@ import tempfile
 import os
 import base64
 import logging
-from fastapi import UploadFile
+from fastapi import UploadFile, File, Form, Depends, BackgroundTasks
 from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
 from pydantic import ValidationError      
 from app.services.google import upload_file_to_drive
@@ -165,7 +165,7 @@ async def chat_with_image_assistant(
     image_file,
     user_id: str,
     conversation_id: str = None,
-    text_prompt: str = "What’s in this image?"
+    text_prompt: str = "What's in this image?"
 ):
     conv_id = conversation_id or str(uuid4())
 
@@ -314,3 +314,64 @@ async def chat_with_image_assistant(
         "conversation_id": conv_id,
         "image_url": public_url,  # Frontend can use this to display/download the image
     }
+
+
+async def process_and_log_image_chat_message(
+    image_bytes, ext, orig_filename, prompt, user_id, conv_id, reply
+):
+    # 1. Save to disk
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    local_filename = f"{uuid4()}.{ext}"
+    local_path = os.path.join(UPLOAD_DIR, local_filename)
+    with open(local_path, "wb") as f:
+        f.write(image_bytes)
+
+    # 2. Upload to Google Drive
+    public_url = upload_file_to_drive(local_path, orig_filename)
+
+    # 3. Prepare chat message for MongoDB (no base64, only Drive URL)
+    mongo_user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "url": public_url}
+        ],
+        "image_url": public_url,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    reply_msg = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # 4. Logging: Save to MongoDB (thread-safe)
+    from app.services.chat_engine import conversations  # Ensure this import works as expected
+    convo = await conversations.find_one({"conversation_id": conv_id})
+    if convo:
+        await conversations.update_one(
+            {"conversation_id": conv_id},
+            {
+                "$set": {
+                    "last_updated": datetime.utcnow(),
+                    "chat_title": "Image Analysis"
+                },
+                "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
+            }
+        )
+    else:
+        new_convo = {
+            "conversation_id": conv_id,
+            "user_id": user_id,
+            "chat_title": "Image Analysis",
+            "created_at": datetime.utcnow(),
+            "last_updated": datetime.utcnow(),
+            "messages": [mongo_user_msg, reply_msg]
+        }
+        await conversations.insert_one(new_convo)
+
+    # 5. Cleanup local file
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
