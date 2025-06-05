@@ -16,12 +16,16 @@ import base64
 import logging
 from fastapi import UploadFile
 from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
-from pydantic import ValidationError          
+from pydantic import ValidationError      
+from app.services.google import upload_file_to_drive
+
 
 # MongoDB setup
 mongo_client = AsyncIOMotorClient(settings.MONGODB_URI)
 db = mongo_client[settings.MONGODB_DB]
 conversations = db["conversations"]
+
+UPLOAD_DIR = os.path.abspath("app/uploads")
 
 # OpenAI client
 client = OpenAI(
@@ -165,9 +169,21 @@ async def chat_with_image_assistant(
 ):
     conv_id = conversation_id or str(uuid4())
 
-    # --- Prepare user message with image ---
-    image_bytes = await image_file.read()
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    # 1. Save the image locally (for upload and for base64 conversion)
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    ext = image_file.filename.split('.')[-1]
+    local_filename = f"{uuid4()}.{ext}"
+    local_path = os.path.join(UPLOAD_DIR, local_filename)
+    with open(local_path, "wb") as f:
+        image_bytes = await image_file.read()
+        f.write(image_bytes)
+
+    # 2. Upload to Google Drive and get public URL
+    public_url = upload_file_to_drive(local_path, image_file.filename)
+
+    # 3. Prepare message for OpenAI (use base64 inline, but not for DB)
+    with open(local_path, "rb") as f:
+        base64_image = base64.b64encode(f.read()).decode("utf-8")
 
     user_msg = {
         "role": "user",
@@ -176,61 +192,101 @@ async def chat_with_image_assistant(
             {
                 "type": "image_url",
                 "image_url": {
-                    "url": f"data:image/jpeg;base64,{base64_image}",
+                    "url": f"data:image/{ext};base64,{base64_image}",
                 },
             },
         ],
-        "timestamp": datetime.utcnow().isoformat()
+        "image_url": public_url,  # This goes in Mongo for the frontend
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
-    # --- Gather previous messages for context ---
+    # 4. Gather previous messages for context, use only text or image links for context
     prior = []
+    convo = None
     if conversation_id:
         convo = await conversations.find_one({"conversation_id": conv_id})
         if convo and "messages" in convo:
             prior = convo["messages"]
 
-    # --- Compose OpenAI message list ---
-    # Prior messages must be flattened as OpenAI expects (text only or text+image for user)
+    # Build context for OpenAI (strip any prior base64 from history)
     messages = []
     for msg in prior:
-        if msg["role"] == "user":
-            # Just include prior text user messages, skip images for context
-            if isinstance(msg["content"], str):
-                messages.append({"role": "user", "content": msg["content"]})
-            elif isinstance(msg["content"], list):
-                # Assume any prior multimodal msg
-                messages.append({"role": "user", "content": msg["content"]})
-        elif msg["role"] == "assistant":
-            messages.append({"role": "assistant", "content": msg["content"]})
-    # Add the new user message (with image)
-    messages.append(user_msg)
+        safe_content = []
+        if isinstance(msg.get("content"), str):
+            safe_content = msg["content"]
+        elif isinstance(msg.get("content"), list):
+            # Only keep text and URLs, never old base64
+            for item in msg["content"]:
+                if item.get("type") == "text":
+                    safe_content.append(item)
+                elif item.get("type") == "image_url":
+                    # Use only if it's a public URL (not base64)
+                    img_url = item.get("image_url", {}).get("url", "")
+                    if img_url and img_url.startswith("http"):
+                        safe_content.append(item)
+        else:
+            continue
 
-    # --- OpenAI API call ---
+        messages.append({"role": msg["role"], "content": safe_content})
+
+    # Add this message (with base64 for LLM call)
+    messages.append({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": text_prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/{ext};base64,{base64_image}",
+                },
+            },
+        ],
+    })
+
+    # 5. Call OpenAI Vision API
     try:
         completion = client.chat.completions.create(
-            model="gpt-4.1",  # or "gpt-4o" if vision enabled, adjust as needed
+            model="gpt-4.1",  # or gpt-4o if your org is enabled
             messages=messages,
             max_tokens=400
         )
     except Exception as e:
+        # Clean up file before raising
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
         raise RuntimeError(f"OpenAI Vision API call failed: {str(e)}")
 
-    # --- Get reply ---
     reply = completion.choices[0].message.content
     reply_msg = {
         "role": "assistant",
         "content": reply,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
-    # --- Logging: Save to MongoDB ---
+    # 6. Store only Google Drive link (never base64) in MongoDB
+    mongo_user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": text_prompt},
+            {"type": "image_url", "url": public_url}
+        ],
+        "image_url": public_url,
+        "timestamp": user_msg["timestamp"],
+    }
+
     async def _log():
         if conversation_id and convo:
             await conversations.update_one(
                 {"conversation_id": conv_id},
-                {"$set": {"last_updated": datetime.utcnow(), "chat_title": "Image Analysis"},
-                 "$push": {"messages": {"$each": [user_msg, reply_msg]}}}
+                {
+                    "$set": {
+                        "last_updated": datetime.utcnow(),
+                        "chat_title": "Image Analysis"
+                    },
+                    "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
+                }
             )
         else:
             new_convo = {
@@ -239,15 +295,22 @@ async def chat_with_image_assistant(
                 "chat_title": "Image Analysis",
                 "created_at": datetime.utcnow(),
                 "last_updated": datetime.utcnow(),
-                "messages": [user_msg, reply_msg]
+                "messages": [mongo_user_msg, reply_msg]
             }
             await conversations.insert_one(new_convo)
 
     import asyncio
     asyncio.create_task(_log())
 
+    # 7. Clean up temp file
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
     return {
         "reply": reply,
         "chat_title": "Image Analysis",
         "conversation_id": conv_id,
+        "image_url": public_url,  # Frontend can use this to display/download the image
     }
