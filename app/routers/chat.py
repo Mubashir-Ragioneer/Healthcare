@@ -47,7 +47,7 @@ from app.schemas.specialist import (
 from app.services.chat_engine import (
     chat_with_assistant,
     conversations,
-    chat_with_assistant_file,
+    chat_with_image_assistant,
 )
 from app.services.find_specialist_engine import (
     find_specialist_response,
@@ -139,7 +139,31 @@ async def chat_endpoint(
         chat_title=result["chat_title"],
         conversation_id=conv_id
     )
-@router.post("/chat/audio", summary="Send audio and receive a reply")
+
+@router.post(
+    "/with-image",
+    summary="Send an image and receive an LLM-powered reply"
+)
+async def chat_with_image(
+    image: UploadFile = File(...),
+    user_id: str = Form(...),
+    conversation_id: str = Form(None),
+    prompt: str = Form("What’s in this image?"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Accepts an image, optional prompt, and returns the model's response.
+    """
+    result = await chat_with_image_assistant(
+        image,
+        user_id,
+        conversation_id,
+        text_prompt=prompt
+    )
+
+    return result
+
+@router.post("/with-audio", summary="Send audio and receive a reply")
 async def chat_with_audio(
     audio: UploadFile = File(...),
     user_id: str = Form(...),
@@ -221,123 +245,6 @@ async def chat_with_audio(
     finally:
         # Clean up temp file
         os.remove(filename)
-
-@router.post("/chat-with-file", summary="Chat with optional file input (OpenAI file_id method)")
-async def chat_with_file(
-    user_id: str = Form(...),
-    message: str = Form(...),             # Simple string, not JSON!
-    conversation_id: str = Form(None),
-    file: UploadFile = File(None),
-    current_user: dict = Depends(get_current_user)
-):
-    # Step 1: Build the message content (OpenAI expects a list)
-    content_blocks = []
-
-    # Step 2: Upload file to OpenAI if present
-    if file:
-        import os
-        from app.services.chat_engine import client  # or however your OpenAI client is imported
-
-        suffix = "." + file.filename.split(".")[-1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(await file.read())
-            tmp.flush()
-            tmp.seek(0)
-            tmp_name = tmp.name
-
-        try:
-            with open(tmp_name, "rb") as f:
-                uploaded = client.files.create(
-                    file=f,
-                    purpose="assistants",  # For OpenAI Assistant API
-                )
-                file_id = uploaded.id
-                logging.info(f"Uploaded file to OpenAI: {file.filename} -> file_id={file_id}")
-            # Required sleep to avoid race condition (sometimes)
-            time.sleep(2)
-            content_blocks.append({"type": "file", "file": {"file_id": file_id}})
-        except Exception as e:
-            logging.error(f"File upload to OpenAI failed: {str(e)}")
-            raise HTTPException(status_code=500, detail="File upload to OpenAI failed.")
-        finally:
-            os.remove(tmp_name)
-    
-    # Step 3: Add the text as the user’s message (always required)
-    content_blocks.append({"type": "text", "text": message})  # message is a string
-
-
-    # Step 4: Build OpenAI chat message
-    openai_messages = [{
-        "role": "user",
-        "content": content_blocks
-    }]
-    print("Final openai_messages", openai_messages)
-
-    # Step 5: Call your assistant (pass the built message)
-    from app.services.chat_engine import chat_with_assistant_file
-    try:
-        result = await chat_with_assistant_file(
-            messages=openai_messages,     # <--- Correct format!
-            user_id=user_id,
-            conversation_id=conversation_id,
-            file=None  # Already handled!
-        )
-        return result
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/chat-with-upload", summary="Send a message with file upload (OpenAI file_id method)")
-async def chat_with_upload(
-    user_id: str = Form(...),
-    conversation_id: str = Form(...),
-    messages: str = Form(...),  # JSON string of message dicts (text parts)
-    file: UploadFile = File(None),
-    current_user: dict = Depends(get_current_user)
-):
-    # Step 1: Parse messages
-    try:
-        msgs = json.loads(messages)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON for messages.")
-
-    # Step 2: If file, upload to OpenAI and get file_id
-    file_id = None
-    if file:
-        try:
-            uploaded = client.files.create(
-                file=file.file,  # FastAPI's UploadFile.file is a file-like object
-                purpose="user_data"
-            )
-            file_id = uploaded.id
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"File upload to OpenAI failed: {e}")
-
-    # Step 3: Build chat messages for OpenAI
-    content_block = []
-    if file_id:
-        content_block.append({
-            "type": "file",
-            "file": {"file_id": file_id}
-        })
-    # Append all text and/or other messages provided
-    for part in msgs:
-        content_block.append(part)
-
-    # Step 4: Send chat completion to OpenAI
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "user", "content": content_block}
-            ]
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI chat completion failed: {e}")
-
-    reply = completion.choices[0].message.content
-    return {"reply": reply, "file_id": file_id}
-
 
 @router.post("/new", response_model=NewChatResponse, summary="Start a new chat thread")
 async def start_new_chat(req: NewChatRequest, current_user: dict = Depends(get_current_user)):

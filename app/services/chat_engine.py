@@ -12,6 +12,7 @@ import json
 import time
 import tempfile
 import os
+import base64
 import logging
 from fastapi import UploadFile
 from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
@@ -61,7 +62,6 @@ async def get_llm_config() -> dict:
         "max_tokens":  cfg.get("max_tokens", 400),
         "prompt":      full_instruction,
     }
-
 
 async def chat_with_assistant(
     messages: List[Dict[str, Any]],
@@ -157,147 +157,97 @@ async def chat_with_assistant(
 
     return {"reply": out.reply, "chat_title": out.chat_title, "conversation_id": conv_id}
 
-
-async def chat_with_assistant_file(
-    messages: List[Dict[str, Any]],
+async def chat_with_image_assistant(
+    image_file,
     user_id: str,
-    conversation_id: Optional[str] = None,
-    file: UploadFile = None
-) -> Dict[str, str]:
-    
-    # 1. Retrieve semantic context
-    query = ""
-    for block in messages[-1]["content"]:
-        if isinstance(block, dict) and block.get("type") == "text":
-            query = block.get("text")
-            break
+    conversation_id: str = None,
+    text_prompt: str = "What’s in this image?"
+):
+    conv_id = conversation_id or str(uuid4())
 
-    if not query:
-        raise RuntimeError("No user text found for semantic search.")
+    # --- Prepare user message with image ---
+    image_bytes = await image_file.read()
+    base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    matches = await search_similar_chunks(query)
-
-    context_chunks = [match["metadata"]["chunk_text"] for match in matches]
-    cfg = await get_llm_config()
-
-    # 2. Build system prompt with context
-    context_block = "\n--\n".join(context_chunks[:3])
-    system_prompt = {
-        "role": "system",
-        "content": f"{cfg['prompt']}\n\nRelevant context:\n{context_block}"
+    user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": text_prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{base64_image}",
+                },
+            },
+        ],
+        "timestamp": datetime.utcnow().isoformat()
     }
 
-    # 3. Get prior conversation messages if needed
-    prior_messages = []
+    # --- Gather previous messages for context ---
+    prior = []
     if conversation_id:
-        convo = await conversations.find_one({"conversation_id": conversation_id})
+        convo = await conversations.find_one({"conversation_id": conv_id})
         if convo and "messages" in convo:
-            prior_messages = convo["messages"]
+            prior = convo["messages"]
 
-    # 4. Prepare the user content block (file + text)
-    content_block = []
-    if file:
-        try:
-            suffix = "." + file.filename.split(".")[-1]
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                tmp.write(await file.read())
-                tmp.flush()
-                tmp.seek(0)
-                tmp_name = tmp.name
-
-            with open(tmp_name, "rb") as f:
-                uploaded = client.files.create(
-                    file=f,
-                    purpose="assistants",  # Must be 'assistants'
-                )
-                file_id = uploaded.id
-                print("File uploaded to OpenAI:", file.filename, "ID:", file_id, "MIME type:", file.content_type)
-
-            time.sleep(2)  # (rare, but can help w/ OpenAI file indexing lag)
-
-            content_block.append({
-                "type": "file",
-                "file": {"file_id": file_id}
-            })
-
-        except Exception as e:
-            logging.error("File upload to OpenAI failed: %s", str(e))
-            raise RuntimeError(f"File upload to OpenAI failed: {e}")
-
-    # 5. Add user text messages
-    for msg in messages:
+    # --- Compose OpenAI message list ---
+    # Prior messages must be flattened as OpenAI expects (text only or text+image for user)
+    messages = []
+    for msg in prior:
         if msg["role"] == "user":
-            if isinstance(msg["content"], dict) and "type" in msg["content"]:
-                content_block.append(msg["content"])
-            else:
-                content_block.append({"type": "text", "text": msg["content"]})
+            # Just include prior text user messages, skip images for context
+            if isinstance(msg["content"], str):
+                messages.append({"role": "user", "content": msg["content"]})
+            elif isinstance(msg["content"], list):
+                # Assume any prior multimodal msg
+                messages.append({"role": "user", "content": msg["content"]})
+        elif msg["role"] == "assistant":
+            messages.append({"role": "assistant", "content": msg["content"]})
+    # Add the new user message (with image)
+    messages.append(user_msg)
 
-    # 6. Compose message sequence for OpenAI
-    final_messages = [system_prompt] + prior_messages + [
-        {"role": "user", "content": content_block}
-    ]
-
-    # 7. OpenAI chat call
+    # --- OpenAI API call ---
     try:
-        response = client.chat.completions.create(
-            model=cfg["model"],
-            messages=final_messages,
-            temperature=cfg["temperature"],
-            max_tokens=cfg["max_tokens"]
+        completion = client.chat.completions.create(
+            model="gpt-4.1",  # or "gpt-4o" if vision enabled, adjust as needed
+            messages=messages,
+            max_tokens=400
         )
     except Exception as e:
-        print("OpenAI API error:", str(e))
-        raise RuntimeError("LLM call failed")
+        raise RuntimeError(f"OpenAI Vision API call failed: {str(e)}")
 
-    reply_raw = response.choices[0].message.content
-    print("Raw LLM response:", repr(reply_raw))
-    logging.info("Raw LLM response: %s", repr(reply_raw))
-
-    try:
-        parsed = json.loads(reply_raw)
-        if not isinstance(parsed, dict):
-            raise TypeError("Expected a JSON object")
-        reply = parsed["reply"]
-        chat_title = parsed.get("chat_title", "New Conversation")
-    except Exception as e:
-        print("Failed to parse JSON:", str(e))
-        raise RuntimeError("Invalid JSON from LLM")
-
-    # 8. Log to DB
-    timestamped_msgs = generate_timestamped_msgs(messages)
+    # --- Get reply ---
+    reply = completion.choices[0].message.content
     reply_msg = {
         "role": "assistant",
         "content": reply,
         "timestamp": datetime.utcnow().isoformat()
     }
-    async def log_to_db():
-        if conversation_id:
+
+    # --- Logging: Save to MongoDB ---
+    async def _log():
+        if conversation_id and convo:
             await conversations.update_one(
-                {"conversation_id": conversation_id},
-                {
-                    "$set": {
-                        "last_updated": datetime.utcnow(),
-                        "chat_title": chat_title
-                    },
-                    "$push": {
-                        "messages": {"$each": timestamped_msgs + [reply_msg]}
-                    }
-                }
+                {"conversation_id": conv_id},
+                {"$set": {"last_updated": datetime.utcnow(), "chat_title": "Image Analysis"},
+                 "$push": {"messages": {"$each": [user_msg, reply_msg]}}}
             )
         else:
             new_convo = {
-                "conversation_id": str(uuid4()),
+                "conversation_id": conv_id,
                 "user_id": user_id,
-                "chat_title": chat_title,
+                "chat_title": "Image Analysis",
                 "created_at": datetime.utcnow(),
                 "last_updated": datetime.utcnow(),
-                "messages": timestamped_msgs + [reply_msg]
+                "messages": [user_msg, reply_msg]
             }
             await conversations.insert_one(new_convo)
-    asyncio.create_task(log_to_db())
+
+    import asyncio
+    asyncio.create_task(_log())
 
     return {
         "reply": reply,
-        "chat_title": chat_title,
-        "conversation_id": conversation_id or "new"
+        "chat_title": "Image Analysis",
+        "conversation_id": conv_id,
     }
