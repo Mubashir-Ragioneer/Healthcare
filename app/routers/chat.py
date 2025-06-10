@@ -142,7 +142,7 @@ async def chat_endpoint(
         conversation_id=conv_id
     )
 
-@router.post("/chat/with-image")
+@router.post("/with-image")
 async def chat_with_image(
     background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
