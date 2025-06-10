@@ -14,6 +14,7 @@ import re
 import tempfile
 import os
 import base64
+import tiktoken
 import logging
 from fastapi import UploadFile, File, Form, Depends, BackgroundTasks
 from app.schemas.chat import ChatModelOutput, Message, ChatRequest, NewChatResponse, NewChatRequest, ChatResponse
@@ -41,6 +42,19 @@ SYSTEM_PROMPT_TAIL = (
     " If the user asks anything outside of medical assistance, return: {\"reply\": \"Sorry, I can only answer medical-assistance questions.\", \"chat_title\": \"New Conversation\"}"
 )
 
+def extract_text_from_content(content):
+    """Extracts all text from an OpenAI message content (supports string or list for multimodal)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        # Join all 'text' fields together for retrieval
+        return " ".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return ""
+
 
 def generate_timestamped_msgs(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [
@@ -67,13 +81,41 @@ async def get_llm_config() -> dict:
         "max_tokens":  cfg.get("max_tokens", 400),
         "prompt":      full_instruction,
     }
+def count_tokens_openai(messages, model="gpt-4o"):
+    """
+    Counts the number of tokens for OpenAI chat API messages using tiktoken.
+    """
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        enc = tiktoken.get_encoding("cl100k_base")
+    tokens_per_message = 3  # According to OpenAI docs for chat API
+    tokens_per_name = 1
+    num_tokens = 0
+    for message in messages:
+        num_tokens += tokens_per_message
+        for key, value in message.items():
+            if key == "content":
+                if isinstance(value, str):
+                    num_tokens += len(enc.encode(value))
+                elif isinstance(value, list):
+                    for part in value:
+                        if isinstance(part, dict):
+                            for v in part.values():
+                                if isinstance(v, str):
+                                    num_tokens += len(enc.encode(v))
+            elif key == "name":
+                num_tokens += tokens_per_name
+            elif isinstance(value, str):
+                num_tokens += len(enc.encode(value))
+    num_tokens += 3  # Every reply is primed with <im_start>assistant
+    return num_tokens
 
 async def chat_with_assistant(
     messages: List[Dict[str, Any]],
     user_id: str,
     conversation_id: Optional[str] = None
 ) -> Dict[str, str]:
-    # assign or generate conversation_id
     conv_id = conversation_id or str(uuid4())
 
     # retrieve semantic context for the last user message
@@ -107,11 +149,24 @@ async def chat_with_assistant(
         "\n".join(sections)
     ])
     system_prompt = {"role": "system", "content": system_content}
-
-    # compose conversation history and user input
     final_messages = [system_prompt] + messages
 
-    # call OpenAI
+    model = cfg.get("model", "gpt-4o")
+    # These limits are up to date for gpt-4o/gpt-4
+    max_model_tokens = 128000 if "gpt-4o" in model else 8192
+    n_tokens = count_tokens_openai(final_messages, model=model)
+    logging.info(f"Token count for chat_with_assistant (model={model}): {n_tokens}")
+
+    if n_tokens > max_model_tokens:
+        logging.error(
+            f"Token count {n_tokens} exceeds max for model {model} ({max_model_tokens})."
+        )
+        return {
+            "reply": "Sorry, your message or file/image is too large for the AI model. Please try a smaller file or shorter message.",
+            "chat_title": "New Conversation",
+            "conversation_id": conv_id,
+        }
+
     try:
         response = client.chat.completions.create(
             model=cfg["model"],
@@ -161,159 +216,6 @@ async def chat_with_assistant(
     asyncio.create_task(_log())
 
     return {"reply": out.reply, "chat_title": out.chat_title, "conversation_id": conv_id}
-
-async def chat_with_image_assistant(
-    image_file,
-    user_id: str,
-    conversation_id: str = None,
-    text_prompt: str = "What's in this image?"
-):
-    conv_id = conversation_id or str(uuid4())
-
-    # 1. Save the image locally (for upload and for base64 conversion)
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    ext = image_file.filename.split('.')[-1]
-    local_filename = f"{uuid4()}.{ext}"
-    local_path = os.path.join(UPLOAD_DIR, local_filename)
-    with open(local_path, "wb") as f:
-        image_bytes = await image_file.read()
-        f.write(image_bytes)
-
-    # 2. Upload to Google Drive and get public URL
-    public_url = upload_file_to_drive(local_path, image_file.filename)
-
-    # 3. Prepare message for OpenAI (use base64 inline, but not for DB)
-    with open(local_path, "rb") as f:
-        base64_image = base64.b64encode(f.read()).decode("utf-8")
-
-    user_msg = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": text_prompt},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{ext};base64,{base64_image}",
-                },
-            },
-        ],
-        "image_url": public_url,  # This goes in Mongo for the frontend
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    # 4. Gather previous messages for context, use only text or image links for context
-    prior = []
-    convo = None
-    if conversation_id:
-        convo = await conversations.find_one({"conversation_id": conv_id})
-        if convo and "messages" in convo:
-            prior = convo["messages"]
-
-    # Build context for OpenAI (strip any prior base64 from history)
-    messages = []
-    for msg in prior:
-        safe_content = []
-        if isinstance(msg.get("content"), str):
-            safe_content = msg["content"]
-        elif isinstance(msg.get("content"), list):
-            # Only keep text and URLs, never old base64
-            for item in msg["content"]:
-                if item.get("type") == "text":
-                    safe_content.append(item)
-                elif item.get("type") == "image_url":
-                    # Use only if it's a public URL (not base64)
-                    img_url = item.get("image_url", {}).get("url", "")
-                    if img_url and img_url.startswith("http"):
-                        safe_content.append(item)
-        else:
-            continue
-
-        messages.append({"role": msg["role"], "content": safe_content})
-
-    # Add this message (with base64 for LLM call)
-    messages.append({
-        "role": "user",
-        "content": [
-            {"type": "text", "text": text_prompt},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{ext};base64,{base64_image}",
-                },
-            },
-        ],
-    })
-
-    # 5. Call OpenAI Vision API
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4.1",  # or gpt-4o if your org is enabled
-            messages=messages,
-            max_tokens=400
-        )
-    except Exception as e:
-        # Clean up file before raising
-        try:
-            os.remove(local_path)
-        except Exception:
-            pass
-        raise RuntimeError(f"OpenAI Vision API call failed: {str(e)}")
-
-    reply = completion.choices[0].message.content
-    reply_msg = {
-        "role": "assistant",
-        "content": reply,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    # 6. Store only Google Drive link (never base64) in MongoDB
-    mongo_user_msg = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": text_prompt},
-            {"type": "image_url", "url": public_url}
-        ],
-        "image_url": public_url,
-        "timestamp": user_msg["timestamp"],
-    }
-
-    async def _log():
-        if conversation_id and convo:
-            await conversations.update_one(
-                {"conversation_id": conv_id},
-                {
-                    "$set": {
-                        "last_updated": datetime.utcnow(),
-                        "chat_title": "Image Analysis"
-                    },
-                    "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
-                }
-            )
-        else:
-            new_convo = {
-                "conversation_id": conv_id,
-                "user_id": user_id,
-                "chat_title": "Image Analysis",
-                "created_at": datetime.utcnow(),
-                "last_updated": datetime.utcnow(),
-                "messages": [mongo_user_msg, reply_msg]
-            }
-            await conversations.insert_one(new_convo)
-
-    asyncio.create_task(_log())
-
-    # 7. Clean up temp file
-    try:
-        os.remove(local_path)
-    except Exception:
-        pass
-
-    return {
-        "reply": reply,
-        "chat_title": "Image Analysis",
-        "conversation_id": conv_id,
-        "image_url": public_url,  # Frontend can use this to display/download the image
-    }
 
 def get_direct_drive_image_url(share_link):
     # Extract file ID from Google Drive share link
@@ -383,164 +285,6 @@ async def process_and_log_image_chat_message(
         os.remove(local_path)
     except Exception:
         pass
-
-async def chat_with_file_assistant(
-    file: UploadFile,
-    user_id: str,
-    conversation_id: str = None,
-    text_prompt: str = "What should I know about this file?"
-):
-    conv_id = conversation_id or str(uuid4())
-
-    # 1. Save the file locally
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    ext = file.filename.split('.')[-1]
-    local_filename = f"{uuid4()}.{ext}"
-    local_path = os.path.join(UPLOAD_DIR, local_filename)
-    file_bytes = await file.read()
-    with open(local_path, "wb") as f:
-        f.write(file_bytes)
-
-    # 2. Upload to Google Drive and get public URL
-    public_url = upload_file_to_drive(local_path, file.filename)
-    mime_type = file.content_type or "application/octet-stream"
-
-    # 3. Prepare message for OpenAI (use base64 inline, not for DB)
-    with open(local_path, "rb") as f:
-        base64_file = base64.b64encode(f.read()).decode("utf-8")
-
-    user_msg = {
-        "role": "user",
-        "content": [
-            {
-                "type": "file",
-                "file": {
-                    "filename": file.filename,
-                    "file_data": f"data:{mime_type};base64,{base64_file}"
-                }
-            },
-            {
-                "type": "text",
-                "text": text_prompt
-            }
-        ],
-        "file_url": public_url,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    # 4. Gather previous messages for context (reconstruct similar to image logic)
-    prior = []
-    convo = None
-    if conversation_id:
-        convo = await conversations.find_one({"conversation_id": conv_id})
-        if convo and "messages" in convo:
-            prior = convo["messages"]
-
-    # Only previous text and file links for context (not base64)
-    messages = []
-    for msg in prior:
-        safe_content = []
-        if isinstance(msg.get("content"), str):
-            safe_content = msg["content"]
-        elif isinstance(msg.get("content"), list):
-            for item in msg["content"]:
-                if item.get("type") == "text":
-                    safe_content.append(item)
-                elif item.get("type") == "file":
-                    file_url = item.get("url", "")
-                    if file_url and file_url.startswith("http"):
-                        safe_content.append(item)
-        else:
-            continue
-        messages.append({"role": msg["role"], "content": safe_content})
-
-    # Add the new user message (with file as base64 for LLM)
-    messages.append({
-        "role": "user",
-        "content": [
-            {
-                "type": "file",
-                "file": {
-                    "filename": file.filename,
-                    "file_data": f"data:{mime_type};base64,{base64_file}"
-                }
-            },
-            {
-                "type": "text",
-                "text": text_prompt
-            }
-        ]
-    })
-
-    # 5. Call OpenAI Vision API
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4.1",  # or gpt-4o if your org has access
-            messages=messages,
-            max_tokens=400
-        )
-    except Exception as e:
-        try:
-            os.remove(local_path)
-        except Exception:
-            pass
-        raise RuntimeError(f"OpenAI File Vision API call failed: {str(e)}")
-
-    reply = completion.choices[0].message.content
-    reply_msg = {
-        "role": "assistant",
-        "content": reply,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
-
-    # 6. Store only Google Drive link (never base64) in MongoDB
-    mongo_user_msg = {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": text_prompt},
-            {"type": "file", "url": public_url, "filename": file.filename, "mime_type": mime_type}
-        ],
-        "file_url": public_url,
-        "timestamp": user_msg["timestamp"],
-    }
-
-    async def _log():
-        if conversation_id and convo:
-            await conversations.update_one(
-                {"conversation_id": conv_id},
-                {
-                    "$set": {
-                        "last_updated": datetime.utcnow(),
-                        "chat_title": "File Analysis"
-                    },
-                    "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
-                }
-            )
-        else:
-            new_convo = {
-                "conversation_id": conv_id,
-                "user_id": user_id,
-                "chat_title": "File Analysis",
-                "created_at": datetime.utcnow(),
-                "last_updated": datetime.utcnow(),
-                "messages": [mongo_user_msg, reply_msg]
-            }
-            await conversations.insert_one(new_convo)
-
-    asyncio.create_task(_log())
-
-    # 7. Clean up temp file
-    try:
-        os.remove(local_path)
-    except Exception:
-        pass
-
-    return {
-        "reply": reply,
-        "chat_title": "File Analysis",
-        "conversation_id": conv_id,
-        "file_url": public_url
-    }
 
 
 async def process_and_log_file_chat_message(

@@ -7,6 +7,7 @@ import tempfile
 from pinecone import Pinecone
 import logging
 import time
+import base64
 from uuid import uuid4
 from datetime import datetime
 from typing import Literal, List, Optional, Dict, Any
@@ -47,9 +48,9 @@ from app.schemas.specialist import (
 from app.services.chat_engine import (
     chat_with_assistant,
     conversations,
-    chat_with_image_assistant,
     process_and_log_image_chat_message,
-    process_and_log_file_chat_message
+    process_and_log_file_chat_message,
+    get_llm_config
 )
 from app.services.find_specialist_engine import (
     find_specialist_response,
@@ -67,9 +68,11 @@ from app.services.google import (
     post_to_google_sheets,
     post_to_google_sheets_clinical_trial,
 )
+from app.services.vector_search import search_similar_chunks
 from app.services.vector_store import embed_text
 from app.services.prompt_templates import FIND_SPECIALIST_PROMPT
 from fastapi import BackgroundTasks
+
 
 ASSEMBLYAI_API_KEY = "0dd308f8c94e4ec9840bbb0348adaad8"  # You should use an environment variable for security!
 
@@ -152,13 +155,36 @@ async def chat_with_file(
     prompt: str = Form("What should I know about this file?"),
     current_user: dict = Depends(get_current_user)
 ):
-    import base64
+    conv_id = conversation_id or str(uuid4())
+
+    # Use the provided prompt for retrieval
+    query = prompt
+    matches = await search_similar_chunks(query)
+    context_chunks = [m["metadata"]["chunk_text"] for m in matches]
+    context_block = "\n--\n".join(context_chunks[:3])
+    logging.info("Context retrieved: %s", context_block)
+
+    cfg = await get_llm_config()
+
+    sections = [
+        f"### Retrieval Content:\n{context_block}",
+        "### Previous Messages:",
+    ]
+    # If you want prior messages, load from DB and append as before (currently will be empty)
+    sections.append(f"### User Query:\n{query}")
+
+    system_content = "\n\n".join([
+        cfg['prompt'],
+        "\n".join(sections)
+    ])
+    system_prompt = {"role": "system", "content": system_content}
+
     ext = file.filename.split('.')[-1]
     mime_type = file.content_type or "application/octet-stream"
     file_bytes = await file.read()
+    import base64
     base64_file = base64.b64encode(file_bytes).decode("utf-8")
 
-    # Build the OpenAI messages array
     llm_messages = [{
         "role": "user",
         "content": [
@@ -175,25 +201,22 @@ async def chat_with_file(
             }
         ]
     }]
+    final_messages = [system_prompt] + llm_messages
 
-    # OpenAI API call
-    client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
     completion = client.chat.completions.create(
-        model="gpt-4.1",  # Or "gpt-4o" if enabled for files
-        messages=llm_messages,
-        max_tokens=400
+        model=cfg["model"],
+        messages=final_messages,
+        temperature=cfg["temperature"],
+        max_tokens=cfg["max_tokens"]
     )
     reply = completion.choices[0].message.content
-    conv_id = conversation_id or str(uuid4())
 
-    # Respond immediately
     response_obj = {
         "reply": reply,
         "chat_title": "File Analysis",
         "conversation_id": conv_id
     }
 
-    # Kick off file upload and logging in the background
     background_tasks.add_task(
         process_and_log_file_chat_message,
         file_bytes, ext, file.filename, mime_type, prompt, user_id, conv_id, reply
@@ -211,55 +234,90 @@ async def chat_with_image(
     prompt: str = Form("What's in this image?"),
     current_user: dict = Depends(get_current_user)
 ):
-    # 1. Read image to memory (don't save to disk yet!)
-    image_bytes = await image.read()
 
-    # 2. Base64 encode for LLM
-    import base64, os
-    ext = image.filename.split('.')[-1]
-    base64_image = base64.b64encode(image_bytes).decode("utf-8")
-
-    # 3. Compose OpenAI message
-    llm_messages = [{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": prompt},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/{ext};base64,{base64_image}"
-                }
-            }
-        ]
-    }]
-
-    # 4. Get LLM reply
-    from app.core.config import settings
-    from openai import OpenAI
-    client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
-    completion = client.chat.completions.create(
-        model="gpt-4.1",  # Or gpt-4o
-        messages=llm_messages,
-        max_tokens=400
-    )
-    reply = completion.choices[0].message.content
     conv_id = conversation_id or str(uuid4())
 
-    # 5. Return the response immediately!
-    response_obj = {
-        "reply": reply,
-        "chat_title": "Image Analysis",
-        "conversation_id": conv_id
-    }
+    try:
+        # 1. Read and encode image
+        image_bytes = await image.read()
+        ext = image.filename.split('.')[-1]
+        base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-    # 6. Start background upload + DB logging
-    background_tasks.add_task(
-        process_and_log_image_chat_message,
-        image_bytes, ext, image.filename, prompt, user_id, conv_id, reply
-    )
+        # 2. Retrieve context via RAG
+        query = prompt
+        matches = await search_similar_chunks(query)
+        context_chunks = [m["metadata"]["chunk_text"] for m in matches]
+        context_block = "\n--\n".join(context_chunks[:3])
+        logging.info("Context retrieved for image chat: %s", context_block)
 
-    return response_obj
+        # 3. Build system prompt (with context and instructions)
+        cfg = await get_llm_config()
+        sections = [
+            f"### Retrieval Content:\n{context_block}",
+            "### Previous Messages:",
+            f"### User Query:\n{query}"
+        ]
+        system_content = "\n\n".join([
+            cfg['prompt'],
+            "\n".join(sections)
+        ])
+        system_prompt = {"role": "system", "content": system_content}
 
+        # 4. Build user (image+text) message
+        user_msg = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/{ext};base64,{base64_image}"
+                    }
+                }
+            ]
+        }
+        final_messages = [system_prompt, user_msg]
+
+        # 5. Call OpenAI
+        try:
+            completion = client.chat.completions.create(
+                model=cfg["model"],
+                messages=final_messages,
+                temperature=cfg["temperature"],
+                max_tokens=cfg["max_tokens"]
+            )
+            reply = completion.choices[0].message.content
+        except Exception as llm_exc:
+            logging.error("OpenAI API error (image chat): %s", llm_exc, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Language model service unavailable. Please try again later."
+            )
+
+        # 6. Prepare response
+        response_obj = {
+            "reply": reply,
+            "chat_title": "Image Analysis",
+            "conversation_id": conv_id
+        }
+
+        # 7. Start background logging/upload
+        background_tasks.add_task(
+            process_and_log_image_chat_message,
+            image_bytes, ext, image.filename, prompt, user_id, conv_id, reply
+        )
+
+        return response_obj
+
+    except HTTPException:
+        # Pass through FastAPI HTTP exceptions directly
+        raise
+    except Exception as exc:
+        logging.exception("Unexpected error in /chat/with-image")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during image analysis."
+        )
 
 
 @router.post("/with-audio", summary="Send audio and receive a reply")
