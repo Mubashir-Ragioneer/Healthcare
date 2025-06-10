@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 import asyncio
 import json
 import time
+import re
 import tempfile
 import os
 import base64
@@ -299,7 +300,6 @@ async def chat_with_image_assistant(
             }
             await conversations.insert_one(new_convo)
 
-    import asyncio
     asyncio.create_task(_log())
 
     # 7. Clean up temp file
@@ -315,6 +315,13 @@ async def chat_with_image_assistant(
         "image_url": public_url,  # Frontend can use this to display/download the image
     }
 
+def get_direct_drive_image_url(share_link):
+    # Extract file ID from Google Drive share link
+    match = re.search(r"/d/([a-zA-Z0-9_-]+)", share_link)
+    if not match:
+        return share_link  # fallback
+    file_id = match.group(1)
+    return f"https://drive.google.com/uc?export=view&id={file_id}"
 
 async def process_and_log_image_chat_message(
     image_bytes, ext, orig_filename, prompt, user_id, conv_id, reply
@@ -328,15 +335,16 @@ async def process_and_log_image_chat_message(
 
     # 2. Upload to Google Drive
     public_url = upload_file_to_drive(local_path, orig_filename)
+    direct_image_url = get_direct_drive_image_url(public_url)
 
     # 3. Prepare chat message for MongoDB (no base64, only Drive URL)
     mongo_user_msg = {
         "role": "user",
         "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "url": public_url}
+            {"type": "image_url", "url": direct_image_url}
         ],
-        "image_url": public_url,
+        "image_url": direct_image_url,
         "timestamp": datetime.utcnow().isoformat(),
     }
     reply_msg = {
@@ -364,6 +372,224 @@ async def process_and_log_image_chat_message(
             "conversation_id": conv_id,
             "user_id": user_id,
             "chat_title": "Image Analysis",
+            "created_at": datetime.utcnow(),
+            "last_updated": datetime.utcnow(),
+            "messages": [mongo_user_msg, reply_msg]
+        }
+        await conversations.insert_one(new_convo)
+
+    # 5. Cleanup local file
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
+async def chat_with_file_assistant(
+    file: UploadFile,
+    user_id: str,
+    conversation_id: str = None,
+    text_prompt: str = "What should I know about this file?"
+):
+    conv_id = conversation_id or str(uuid4())
+
+    # 1. Save the file locally
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    ext = file.filename.split('.')[-1]
+    local_filename = f"{uuid4()}.{ext}"
+    local_path = os.path.join(UPLOAD_DIR, local_filename)
+    file_bytes = await file.read()
+    with open(local_path, "wb") as f:
+        f.write(file_bytes)
+
+    # 2. Upload to Google Drive and get public URL
+    public_url = upload_file_to_drive(local_path, file.filename)
+    mime_type = file.content_type or "application/octet-stream"
+
+    # 3. Prepare message for OpenAI (use base64 inline, not for DB)
+    with open(local_path, "rb") as f:
+        base64_file = base64.b64encode(f.read()).decode("utf-8")
+
+    user_msg = {
+        "role": "user",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "filename": file.filename,
+                    "file_data": f"data:{mime_type};base64,{base64_file}"
+                }
+            },
+            {
+                "type": "text",
+                "text": text_prompt
+            }
+        ],
+        "file_url": public_url,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # 4. Gather previous messages for context (reconstruct similar to image logic)
+    prior = []
+    convo = None
+    if conversation_id:
+        convo = await conversations.find_one({"conversation_id": conv_id})
+        if convo and "messages" in convo:
+            prior = convo["messages"]
+
+    # Only previous text and file links for context (not base64)
+    messages = []
+    for msg in prior:
+        safe_content = []
+        if isinstance(msg.get("content"), str):
+            safe_content = msg["content"]
+        elif isinstance(msg.get("content"), list):
+            for item in msg["content"]:
+                if item.get("type") == "text":
+                    safe_content.append(item)
+                elif item.get("type") == "file":
+                    file_url = item.get("url", "")
+                    if file_url and file_url.startswith("http"):
+                        safe_content.append(item)
+        else:
+            continue
+        messages.append({"role": msg["role"], "content": safe_content})
+
+    # Add the new user message (with file as base64 for LLM)
+    messages.append({
+        "role": "user",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "filename": file.filename,
+                    "file_data": f"data:{mime_type};base64,{base64_file}"
+                }
+            },
+            {
+                "type": "text",
+                "text": text_prompt
+            }
+        ]
+    })
+
+    # 5. Call OpenAI Vision API
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4.1",  # or gpt-4o if your org has access
+            messages=messages,
+            max_tokens=400
+        )
+    except Exception as e:
+        try:
+            os.remove(local_path)
+        except Exception:
+            pass
+        raise RuntimeError(f"OpenAI File Vision API call failed: {str(e)}")
+
+    reply = completion.choices[0].message.content
+    reply_msg = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # 6. Store only Google Drive link (never base64) in MongoDB
+    mongo_user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": text_prompt},
+            {"type": "file", "url": public_url, "filename": file.filename, "mime_type": mime_type}
+        ],
+        "file_url": public_url,
+        "timestamp": user_msg["timestamp"],
+    }
+
+    async def _log():
+        if conversation_id and convo:
+            await conversations.update_one(
+                {"conversation_id": conv_id},
+                {
+                    "$set": {
+                        "last_updated": datetime.utcnow(),
+                        "chat_title": "File Analysis"
+                    },
+                    "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
+                }
+            )
+        else:
+            new_convo = {
+                "conversation_id": conv_id,
+                "user_id": user_id,
+                "chat_title": "File Analysis",
+                "created_at": datetime.utcnow(),
+                "last_updated": datetime.utcnow(),
+                "messages": [mongo_user_msg, reply_msg]
+            }
+            await conversations.insert_one(new_convo)
+
+    asyncio.create_task(_log())
+
+    # 7. Clean up temp file
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
+    return {
+        "reply": reply,
+        "chat_title": "File Analysis",
+        "conversation_id": conv_id,
+        "file_url": public_url
+    }
+
+
+async def process_and_log_file_chat_message(
+    file_bytes, ext, orig_filename, mime_type, prompt, user_id, conv_id, reply
+):
+    # 1. Save to disk
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    local_filename = f"{uuid4()}.{ext}"
+    local_path = os.path.join(UPLOAD_DIR, local_filename)
+    with open(local_path, "wb") as f:
+        f.write(file_bytes)
+
+    # 2. Upload to Google Drive
+    public_url = upload_file_to_drive(local_path, orig_filename)
+
+    # 3. Prepare chat message for MongoDB (no base64, only Drive URL)
+    mongo_user_msg = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "file", "url": public_url, "filename": orig_filename, "mime_type": mime_type}
+        ],
+        "file_url": public_url,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    reply_msg = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    # 4. Logging: Save to MongoDB (thread-safe)
+    convo = await conversations.find_one({"conversation_id": conv_id})
+    if convo:
+        await conversations.update_one(
+            {"conversation_id": conv_id},
+            {
+                "$set": {
+                    "last_updated": datetime.utcnow(),
+                    "chat_title": "File Analysis"
+                },
+                "$push": {"messages": {"$each": [mongo_user_msg, reply_msg]}}
+            }
+        )
+    else:
+        new_convo = {
+            "conversation_id": conv_id,
+            "user_id": user_id,
+            "chat_title": "File Analysis",
             "created_at": datetime.utcnow(),
             "last_updated": datetime.utcnow(),
             "messages": [mongo_user_msg, reply_msg]

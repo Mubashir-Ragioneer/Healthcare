@@ -48,7 +48,8 @@ from app.services.chat_engine import (
     chat_with_assistant,
     conversations,
     chat_with_image_assistant,
-    process_and_log_image_chat_message
+    process_and_log_image_chat_message,
+    process_and_log_file_chat_message
 )
 from app.services.find_specialist_engine import (
     find_specialist_response,
@@ -141,6 +142,65 @@ async def chat_endpoint(
         chat_title=result["chat_title"],
         conversation_id=conv_id
     )
+
+@router.post("/with-file")
+async def chat_with_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    conversation_id: str = Form(None),
+    prompt: str = Form("What should I know about this file?"),
+    current_user: dict = Depends(get_current_user)
+):
+    import base64
+    ext = file.filename.split('.')[-1]
+    mime_type = file.content_type or "application/octet-stream"
+    file_bytes = await file.read()
+    base64_file = base64.b64encode(file_bytes).decode("utf-8")
+
+    # Build the OpenAI messages array
+    llm_messages = [{
+        "role": "user",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "filename": file.filename,
+                    "file_data": f"data:{mime_type};base64,{base64_file}"
+                }
+            },
+            {
+                "type": "text",
+                "text": prompt
+            }
+        ]
+    }]
+
+    # OpenAI API call
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
+    completion = client.chat.completions.create(
+        model="gpt-4.1",  # Or "gpt-4o" if enabled for files
+        messages=llm_messages,
+        max_tokens=400
+    )
+    reply = completion.choices[0].message.content
+    conv_id = conversation_id or str(uuid4())
+
+    # Respond immediately
+    response_obj = {
+        "reply": reply,
+        "chat_title": "File Analysis",
+        "conversation_id": conv_id
+    }
+
+    # Kick off file upload and logging in the background
+    background_tasks.add_task(
+        process_and_log_file_chat_message,
+        file_bytes, ext, file.filename, mime_type, prompt, user_id, conv_id, reply
+    )
+
+    return response_obj
+
 
 @router.post("/with-image")
 async def chat_with_image(
