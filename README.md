@@ -6,7 +6,7 @@
 
 # 🧠 AI Medical Assistant (Backend Only)
 
-An AI-powered medical assistant backend built using **FastAPI**, **OpenAI GPT-4o**, **MongoDB**, and **Pinecone**. It provides LLM-driven chat, appointment scheduling, quotation requests, document ingestion, and an admin panel to configure language model settings.
+An AI-powered medical assistant backend built using **FastAPI**, **OpenAI GPT-4.1**, **MongoDB**, and **Pinecone**. It provides LLM-driven chat, appointment scheduling, quotation requests, document ingestion, and an admin panel to configure language model settings.
 
 ---
 
