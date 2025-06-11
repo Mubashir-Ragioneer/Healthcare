@@ -146,7 +146,11 @@ async def chat_endpoint(
         conversation_id=conv_id
     )
 
-@router.post("/with-file")
+@router.post(
+    "/with-file",
+    response_model=ChatResponse,
+    summary="Send a file and receive a chat response"
+)
 async def chat_with_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -157,75 +161,103 @@ async def chat_with_file(
 ):
     conv_id = conversation_id or str(uuid4())
 
-    # Use the provided prompt for retrieval
-    query = prompt
-    matches = await search_similar_chunks(query)
-    context_chunks = [m["metadata"]["chunk_text"] for m in matches]
-    context_block = "\n--\n".join(context_chunks[:3])
-    logging.info("Context retrieved: %s", context_block)
+    try:
+        # 1. Read and encode the file
+        file_bytes = await file.read()
+        ext = file.filename.split('.')[-1]
+        mime_type = file.content_type or "application/octet-stream"
+        base64_file = base64.b64encode(file_bytes).decode("utf-8")
 
-    cfg = await get_llm_config()
+        # 2. Retrieval: Use prompt for semantic context (RAG)
+        query = prompt
+        matches = await search_similar_chunks(query)
+        context_chunks = [m["metadata"]["chunk_text"] for m in matches]
+        context_block = "\n--\n".join(context_chunks[:3])
+        logging.info(f"[with-file] Context retrieved: {context_block[:500]}")
 
-    sections = [
-        f"### Retrieval Content:\n{context_block}",
-        "### Previous Messages:",
-    ]
-    # If you want prior messages, load from DB and append as before (currently will be empty)
-    sections.append(f"### User Query:\n{query}")
-
-    system_content = "\n\n".join([
-        cfg['prompt'],
-        "\n".join(sections)
-    ])
-    system_prompt = {"role": "system", "content": system_content}
-
-    ext = file.filename.split('.')[-1]
-    mime_type = file.content_type or "application/octet-stream"
-    file_bytes = await file.read()
-    import base64
-    base64_file = base64.b64encode(file_bytes).decode("utf-8")
-
-    llm_messages = [{
-        "role": "user",
-        "content": [
-            {
-                "type": "file",
-                "file": {
-                    "filename": file.filename,
-                    "file_data": f"data:{mime_type};base64,{base64_file}"
-                }
-            },
-            {
-                "type": "text",
-                "text": prompt
-            }
+        # 3. Build system prompt
+        cfg = await get_llm_config()
+        sections = [
+            f"### Retrieval Content:\n{context_block}",
+            "### Previous Messages:",
+            f"### User Query:\n{query}"
         ]
-    }]
-    final_messages = [system_prompt] + llm_messages
+        system_content = "\n\n".join([
+            cfg['prompt'],
+            "\n".join(sections)
+        ])
+        system_prompt = {"role": "system", "content": system_content}
 
-    completion = client.chat.completions.create(
-        model=cfg["model"],
-        messages=final_messages,
-        temperature=cfg["temperature"],
-        max_tokens=cfg["max_tokens"]
-    )
-    reply = completion.choices[0].message.content
+        # 4. Build multimodal user message
+        user_msg = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": file.filename,
+                        "file_data": f"data:{mime_type};base64,{base64_file}"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ]
+        }
+        final_messages = [system_prompt, user_msg]
 
-    response_obj = {
-        "reply": reply,
-        "chat_title": "File Analysis",
-        "conversation_id": conv_id
-    }
+        # 5. Call OpenAI
+        try:
+            completion = client.chat.completions.create(
+                model=cfg["model"],
+                messages=final_messages,
+                temperature=cfg["temperature"],
+                max_tokens=cfg["max_tokens"]
+            )
+            raw_reply = completion.choices[0].message.content
+            try:
+                llm_json = json.loads(raw_reply)
+                reply_text = llm_json.get("reply", raw_reply)
+                chat_title = llm_json.get("chat_title", "File Analysis")
+            except Exception as e:
+                logging.warning("Failed to parse LLM JSON, returning raw text. Error: %s", e, exc_info=True)
+                reply_text = raw_reply
+                chat_title = "File Analysis"
+        except Exception as llm_exc:
+            logging.error("[with-file] OpenAI API error: %s", llm_exc, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail="Language model service unavailable. Please try again later."
+            )
 
-    background_tasks.add_task(
-        process_and_log_file_chat_message,
-        file_bytes, ext, file.filename, mime_type, prompt, user_id, conv_id, reply
-    )
+        # 6. Background task for file logging/upload
+        background_tasks.add_task(
+            process_and_log_file_chat_message,
+            file_bytes, ext, file.filename, mime_type, prompt, user_id, conv_id, reply_text
+        )
 
-    return response_obj
+        # 7. Consistent response
+        return ChatResponse(
+            reply=reply_text,
+            chat_title=chat_title,
+            conversation_id=conv_id
+        )
 
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("[with-file] Unexpected server error")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during file analysis."
+        )
 
-@router.post("/with-image")
+@router.post(
+    "/with-image",
+    response_model=ChatResponse,
+    summary="Send an image and receive a chat response"
+)
 async def chat_with_image(
     background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
@@ -243,14 +275,14 @@ async def chat_with_image(
         ext = image.filename.split('.')[-1]
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
 
-        # 2. Retrieve context via RAG
+        # 2. Retrieval: Use prompt for semantic context (RAG)
         query = prompt
         matches = await search_similar_chunks(query)
         context_chunks = [m["metadata"]["chunk_text"] for m in matches]
         context_block = "\n--\n".join(context_chunks[:3])
-        logging.info("Context retrieved for image chat: %s", context_block)
+        logging.info(f"[with-image] Context retrieved: {context_block[:500]}")
 
-        # 3. Build system prompt (with context and instructions)
+        # 3. Build system prompt
         cfg = await get_llm_config()
         sections = [
             f"### Retrieval Content:\n{context_block}",
@@ -263,7 +295,7 @@ async def chat_with_image(
         ])
         system_prompt = {"role": "system", "content": system_content}
 
-        # 4. Build user (image+text) message
+        # 4. Build multimodal user message
         user_msg = {
             "role": "user",
             "content": [
@@ -287,33 +319,37 @@ async def chat_with_image(
                 max_tokens=cfg["max_tokens"]
             )
             reply = completion.choices[0].message.content
+            try:
+                llm_json = json.loads(reply)
+                reply_text = llm_json.get("reply", reply)
+                chat_title = llm_json.get("chat_title", "File Analysis")
+            except Exception as e:
+                logging.error("Failed to parse LLM JSON: %s", e, exc_info=True)
+                reply_text = reply
+                chat_title = "File Analysis"
         except Exception as llm_exc:
-            logging.error("OpenAI API error (image chat): %s", llm_exc, exc_info=True)
+            logging.error("[with-image] OpenAI API error: %s", llm_exc, exc_info=True)
             raise HTTPException(
                 status_code=502,
                 detail="Language model service unavailable. Please try again later."
             )
 
-        # 6. Prepare response
-        response_obj = {
-            "reply": reply,
-            "chat_title": "Image Analysis",
-            "conversation_id": conv_id
-        }
-
-        # 7. Start background logging/upload
+        # 6. Background task for image logging/upload
         background_tasks.add_task(
             process_and_log_image_chat_message,
             image_bytes, ext, image.filename, prompt, user_id, conv_id, reply
         )
 
-        return response_obj
-
+        # 7. Consistent response
+        return ChatResponse(
+            reply=reply_text,
+            chat_title=chat_title,
+            conversation_id=conv_id
+        )
     except HTTPException:
-        # Pass through FastAPI HTTP exceptions directly
         raise
     except Exception as exc:
-        logging.exception("Unexpected error in /chat/with-image")
+        logging.exception("[with-image] Unexpected server error")
         raise HTTPException(
             status_code=500,
             detail="Internal server error during image analysis."
