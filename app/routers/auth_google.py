@@ -101,13 +101,14 @@ async def auth_callback(request: Request):
                     "provider": "google",
                     "role": "user",
                     "lead_source": lead_source,
-                    "created_at": datetime.utcnow()  # <---- ADD THIS LINE
+                    "created_at": datetime.utcnow() 
                 },
                 "$set": {
                     "email": email,
-                    "name": name,
+                    "full_name": name,
                     "picture": picture
                 }
+
             },
             upsert=True
         )
@@ -115,6 +116,11 @@ async def auth_callback(request: Request):
 
         # 5. Get user, check for diagnosis
         user = await user_collection.find_one({"email": email})
+        if user.get("role") in ("admin", "owner"):
+            raise HTTPException(
+                status_code=403,
+                detail="Google login is not supported for admin or owner accounts. Please log in with your email and password."
+            )
         needs_profile_completion = not bool(user.get("diagnosis"))
 
         # 6. Google Sheets logging (sanitize if needed)
