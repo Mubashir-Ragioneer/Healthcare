@@ -202,6 +202,57 @@ async def get_all_users(
     except Exception as e:
         raise InternalServerError(f"Failed to fetch users: {e}")
 
+@router.get("/password-users", summary="Get users who registered with password (non-Google users)")
+async def get_password_users(
+    page: int = 1,
+    page_size: int = 20,
+    search: str = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Return paginated list of users who have a password set (i.e., not signed up via Google).
+    Useful for showing only those who can be promoted to admin.
+    """
+    try:
+        skip, limit = build_pagination(page, page_size)
+        sort = build_sort(sort_by, sort_order)
+
+        # Query: user document has a 'password' field (exclude Google users)
+        query = {"password": {"$exists": True, "$ne": ""}}
+        if search:
+            query["$or"] = [
+                {"email": {"$regex": search, "$options": "i"}},
+                {"name": {"$regex": search, "$options": "i"}},
+                {"full_name": {"$regex": search, "$options": "i"}},
+            ]
+
+        total = await users_collection.count_documents(query)
+        cursor = users_collection.find(query).sort(sort).skip(skip).limit(limit)
+        users = []
+        async for user in cursor:
+            user["_id"] = str(user["_id"])
+            user.pop("password", None)
+            users.append({
+                "id": user["_id"],
+                "email": user.get("email"),
+                "name": user.get("name") or user.get("full_name", ""),
+                "role": user.get("role", "user"),
+                "diagnosis": user.get("diagnosis"),
+                "verified": user.get("verified", False),
+                "created_at": user.get("created_at"),
+            })
+
+        return {
+            "success": True,
+            "users": users,
+            "total": total,
+            "page": page,
+            "page_size": page_size
+        }
+    except Exception as e:
+        raise InternalServerError(f"Failed to fetch users with password: {e}")
 
 @router.get("/Get-All-Admins", summary="List all admin users")
 async def list_admin_users(
