@@ -114,9 +114,16 @@ async def auth_callback(request: Request):
         # 5. Get user, check for diagnosis
         user = await user_collection.find_one({"email": email})
         if user.get("role") in ("admin", "owner"):
-            raise HTTPException(
-                status_code=403,
-                detail="Google login is not supported for admin or owner accounts. Please log in with your email and password."
+            # Redirect back to the login page with error message in URL
+            error_message = (
+                "Google login is not supported for admin or owner accounts. Please log in with your email and password."
+            )
+            # You might want to urlencode the message for safety (esp. if it has spaces)
+            from urllib.parse import quote
+            encoded_message = quote(error_message)
+            return RedirectResponse(
+                url=f"{frontend_url}/login?error={encoded_message}",
+                status_code=302
             )
         needs_profile_completion = not bool(user.get("diagnosis"))
 
