@@ -19,6 +19,7 @@ NAMESPACE = "specialist"
 pc = Pinecone(api_key=PINECONE_API_KEY)
 pinecone_index = pc.Index(host=INDEX_HOST)
 
+client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 
 def clean_and_parse(raw: str) -> dict:
     match = re.search(r"\{[\s\S]*\}", raw)
@@ -91,8 +92,21 @@ def is_similar_query(new_query: str, old_query: str) -> bool:
     # You can use fuzzywuzzy or rapidfuzz for more advanced similarity
     return n == o or (len(n) > 10 and n in o) or (len(o) > 10 and o in n)
 
-client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
+def get_registration(doc):
+    crm = doc.get('crm', '')
+    if isinstance(crm, list):
+        return crm
+    elif isinstance(crm, str):
+        return [crm] if crm else []
+    return []
 
+def get_specialization(doc):
+    # Always prefer lists
+    return (
+        doc.get('medical_specialty', []) or
+        doc.get('specialty', []) or
+        ([doc.get('specialization', '')] if doc.get('specialization', '') else [])
+    )
 
 def find_specialist_response(
     user_query: str,

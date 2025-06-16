@@ -57,7 +57,9 @@ from app.services.find_specialist_engine import (
     get_recent_specialist_suggestions,
     save_specialist_history,
     is_similar_query,
-    get_full_specialist_session_history
+    get_full_specialist_session_history,
+    get_registration,
+    get_specialization
 )
 from app.services.kommo import (
     push_lead_to_kommo,
@@ -630,23 +632,18 @@ async def suggest_specialist(
         # 4️ Format the RAG block as strict JSON per profile
         rag_context_str = ""
         if doctors:
-            rag_context_str = "\n".join([
-                f"""{{
-    "Name": "{doc.get('name', '')}",
-    "Specialization": "{(
-        ', '.join(doc.get('medical_specialty', [])) or
-        ', '.join(doc.get('specialty', [])) or
-        doc.get('specialization', '') or
-        ''
-    )}",
-    "Registration": "{doc.get('crm', '')}",
-    "Image": "{doc.get('Image in Google Drive', 'https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png')}",
-    "doctor_description": "{doc.get('my_story', '')[:1000]}"
-    }}"""
+            rag_context = [
+                {
+                    "Name": doc.get('name', ''),
+                    "Specialization": get_specialization(doc),
+                    "Registration": get_registration(doc),
+                    "Image": doc.get('Image in Google Drive', 'https://nudii.com.br/wp-content/uploads/2025/05/placeholder.png'),
+                    "doctor_description": doc.get('my_story', '')[:1000]
+                }
                 for doc in doctors
-            ])
-            #logger.info("RAG context: %s", rag_context_str)
-
+            ]
+            rag_context_str = "\n".join([json.dumps(obj, ensure_ascii=False) for obj in rag_context])
+            logger.info("RAG context: %s", rag_context_str)
         # 5️ Compose the system prompt: RAG context FIRST, then instructions
         if rag_context_str:
             system_prompt = (

@@ -13,8 +13,6 @@ from app.services.google import post_to_google_sheets_signup
 from app.utils.urls import detect_frontend_url
 from datetime import datetime
 
-
-
 router = APIRouter(tags=["auth"])
 
 config = Config(".env")
@@ -112,7 +110,6 @@ async def auth_callback(request: Request):
             },
             upsert=True
         )
-
 
         # 5. Get user, check for diagnosis
         user = await user_collection.find_one({"email": email})
